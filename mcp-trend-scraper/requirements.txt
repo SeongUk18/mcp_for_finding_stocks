@@ -1,0 +1,5 @@
+python-dotenv
+httpx
+youtube-transcript-api
+mcp
+
