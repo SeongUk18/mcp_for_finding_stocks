@@ -62,11 +62,10 @@ python -m venv .venv
 
 ---
 
-## Cursor / Claude Desktop MCP 연결 (Windows)
+## Claude Desktop MCP 연결 (Windows)
 
 가상환경의 Python을 쓰려면 **command**에 `.venv\Scripts\python.exe` 경로를 넣습니다.
 
-**Cursor**: 설정 → MCP → 서버 추가  
 **Claude Desktop**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
