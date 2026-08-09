@@ -1,6 +1,6 @@
 # 급등주 예측 에이전트 — MCP 서버 (Python)
 
-한국 주식 단타용 데이터를 제공하는 MCP 서버 두 개입니다.
+한국 주식 추천 데이터를 제공하는 MCP 서버 두 개입니다.
 
 | 서버 | 역할 | 도구 |
 |------|------|------|
@@ -62,11 +62,10 @@ python -m venv .venv
 
 ---
 
-## Cursor / Claude Desktop MCP 연결 (Windows)
+## Claude Desktop MCP 연결 (Windows)
 
 가상환경의 Python을 쓰려면 **command**에 `.venv\Scripts\python.exe` 경로를 넣습니다.
 
-**Cursor**: 설정 → MCP → 서버 추가  
 **Claude Desktop**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
