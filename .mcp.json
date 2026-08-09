@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "trend-scraper": {
+      "command": "${workspaceFolder}/mcp-trend-scraper/.venv/Scripts/python.exe",
+      "args": ["${workspaceFolder}/mcp-trend-scraper/main.py"],
+      "cwd": "${workspaceFolder}/mcp-trend-scraper"
+    },
+    "market-data": {
+      "command": "${workspaceFolder}/mcp-market-data/.venv/Scripts/python.exe",
+      "args": ["${workspaceFolder}/mcp-market-data/main.py"],
+      "cwd": "${workspaceFolder}/mcp-market-data"
+    },
+    "us-market-data": {
+      "command": "${workspaceFolder}/mcp-us-market-data/.venv/Scripts/python.exe",
+      "args": ["${workspaceFolder}/mcp-us-market-data/main.py"],
+      "cwd": "${workspaceFolder}/mcp-us-market-data"
+    }
+  }
+}
