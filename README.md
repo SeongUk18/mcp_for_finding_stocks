@@ -5,10 +5,12 @@
 | 서버 | 시장 | 역할 | 도구 |
 |------|------|------|------|
 | **mcp-trend-scraper** | 🇰🇷 | 소셜/재료 수집 | `search_youtube_keywords`, `search_news_for_trend_keywords` |
-| **mcp-market-data** | 🇰🇷 | 퀀트/차트 분석 | `get_current_price_and_chart`, `get_institutional_buying` |
-| **mcp-us-market-data** | 🇺🇸 | 미국장 전 과정 | `search_serenity_tickers`, `get_us_price_and_chart`, `get_us_institutional_flow`, `get_us_news_sentiment` |
+| **mcp-market-data** | 🇰🇷 | 퀀트/차트/수급 | `get_kr_market_movers`, `get_current_price_and_chart`, `get_institutional_buying`, `get_kr_news_and_opinion` |
+| **mcp-us-market-data** | 🇺🇸 | 미국장 전 과정 | `search_serenity_tickers`, `get_us_market_movers`, `get_us_price_and_chart`, `get_us_institutional_flow`, `get_us_news_sentiment` |
 
-미국장 서버는 **API 키가 필요 없습니다** (yfinance + 공개 아카이브).
+미국장 서버는 **키 없이도 동작**하지만(yfinance + 공개 아카이브),
+한투 키가 있으면 **무료 실시간 시세·프리마켓 분봉·호가·순위·한글 뉴스**까지 씁니다.
+키는 `mcp-market-data/.env`에 있으면 자동으로 읽어옵니다.
 자세한 내용은 [mcp-us-market-data/README.md](mcp-us-market-data/README.md)를 보세요.
 
 ---
@@ -125,4 +127,4 @@ python -m venv .venv
 |------|-----------|--------|
 | trend-scraper | YOUTUBE_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET | [Google Cloud](https://console.cloud.google.com), [Naver Developers](https://developers.naver.com) |
 | market-data | KIS_APPKEY, KIS_APPSECRET | [한국투자증권 API 포털](https://apiportal.koreainvestment.com) |
-| **us-market-data** | **없음** | yfinance + 공개 아카이브라 발급할 키가 없습니다 |
+| **us-market-data** | (선택) KIS_APPKEY, KIS_APPSECRET | 없어도 동작하지만 넣으면 실시간 시세·호가·순위가 열립니다. market-data와 같은 키를 씁니다 |
