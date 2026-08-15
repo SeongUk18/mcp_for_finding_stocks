@@ -109,8 +109,16 @@ def analyze_technicals(
     lows: list[float],
     volumes: list[int],
     benchmark_closes: dict[str, list[float]] | None = None,
+    last_bar_partial: bool = False,
 ) -> dict[str, Any]:
-    """일봉 시계열에서 계산 가능한 원시 수치만 반환."""
+    """
+    일봉 시계열에서 계산 가능한 원시 수치만 반환.
+
+    last_bar_partial: 마지막 봉이 진행 중인 세션이면 True.
+    가격·이동평균은 진행 중 값을 쓰는 게 맞지만, 거래량은 아직 하루치가 안 쌓여서
+    20일 평균과 그대로 비교하면 항상 미달로 나온다. 그래서 거래량 비율은
+    직전 완결 세션 기준으로 계산하고, 진행 중 거래량은 따로 떼어 보고한다.
+    """
     out: dict[str, Any] = {}
     current = closes[-1] if closes else None
 
@@ -125,16 +133,36 @@ def analyze_technicals(
         out["atr14_pct_of_price"] = None
 
     # 거래량은 전일 대비보다 20일 평균 대비가 급등 판단에 안정적이다.
-    if len(volumes) >= 21:
-        avg20 = sum(volumes[-21:-1]) / 20
+    # 진행 중 세션은 제외하고 완결된 봉만으로 계산한다.
+    partial_volume = volumes[-1] if (last_bar_partial and volumes) else None
+    closed_volumes = volumes[:-1] if last_bar_partial else volumes
+
+    if len(closed_volumes) >= 21:
+        avg20 = sum(closed_volumes[-21:-1]) / 20
         out["volume_avg20"] = int(avg20)
-        out["volume_ratio_vs_avg20"] = round(volumes[-1] / avg20, 2) if avg20 > 0 else None
+        out["volume_ratio_vs_avg20"] = (
+            round(closed_volumes[-1] / avg20, 2) if avg20 > 0 else None
+        )
     else:
+        avg20 = 0.0
         out["volume_avg20"] = None
         out["volume_ratio_vs_avg20"] = None
     out["volume_ratio_vs_prev_day"] = (
-        round(volumes[-1] / volumes[-2], 2) if len(volumes) >= 2 and volumes[-2] > 0 else None
+        round(closed_volumes[-1] / closed_volumes[-2], 2)
+        if len(closed_volumes) >= 2 and closed_volumes[-2] > 0
+        else None
     )
+    out["volume_basis"] = "진행 중 세션 제외, 직전 완결 세션 기준" if last_bar_partial else "최종 세션 기준"
+
+    if partial_volume is not None:
+        out["partial_session_volume"] = {
+            "volume": partial_volume,
+            "pct_of_avg20": round(partial_volume / avg20 * 100, 1) if avg20 > 0 else None,
+            "note": (
+                "현재 세션이 진행 중이라 하루치가 아직 안 쌓였습니다. "
+                "volume_ratio_vs_avg20과 직접 비교하지 마세요."
+            ),
+        }
 
     window = closes[-252:] if len(closes) >= 252 else closes
     if window and current:
