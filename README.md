@@ -26,7 +26,7 @@
 ## 프로젝트 구조
 
 ```
-finding_stocks/
+mcp_for_finding_stocks/
 ├── mcp-trend-scraper/       # 유튜브·뉴스
 │   ├── .env                 # API 키 (YOUTUBE, NAVER)
 │   ├── config.py
@@ -58,7 +58,7 @@ finding_stocks/
 ### mcp-market-data
 
 ```powershell
-cd c:\Users\adult\Desktop\finding_stocks\mcp-market-data
+cd c:\Users\adult\Desktop\mcp_for_finding_stocks\mcp-market-data
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python main.py
@@ -67,7 +67,7 @@ python -m venv .venv
 ### mcp-trend-scraper
 
 ```powershell
-cd c:\Users\adult\Desktop\finding_stocks\mcp-trend-scraper
+cd c:\Users\adult\Desktop\mcp_for_finding_stocks\mcp-trend-scraper
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python main.py

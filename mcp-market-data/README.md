@@ -45,7 +45,7 @@
 ## 설치 및 실행 (가상환경 권장)
 
 ```powershell
-cd c:\Users\adult\Desktop\finding_stocks\mcp-market-data
+cd c:\Users\adult\Desktop\mcp_for_finding_stocks\mcp-market-data
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python main.py
