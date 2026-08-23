@@ -314,6 +314,10 @@ def get_us_price_and_chart(
             "from_kis_today": appended_date is not None,
         },
         "technicals": technicals,
+        "recent_daily": [
+            {"date": d, "close": round(c, 2)}
+            for d, c in list(zip(daily["dates"], daily["close"]))[-15:]
+        ],
         "data_points": len(daily["close"]),
         "currency": quote.get("currency", "USD"),
     }

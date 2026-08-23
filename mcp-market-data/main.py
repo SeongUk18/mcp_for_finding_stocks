@@ -225,6 +225,10 @@ def get_current_price_and_chart(
             "volume_power": parsed["volume_power"],
         },
         "technicals": technicals,
+        "recent_daily": [
+            {"date": b["date"], "close": b["close"], "high": b.get("high"), "low": b.get("low")}
+            for b in bars[-15:]
+        ],
         "unit": "원",
     }
 
