@@ -315,8 +315,9 @@ def get_us_price_and_chart(
         },
         "technicals": technicals,
         "recent_daily": [
-            {"date": d, "close": round(c, 2)}
-            for d, c in list(zip(daily["dates"], daily["close"]))[-15:]
+            {"date": d, "close": round(c, 2), "volume": v}
+            for d, c, v in list(zip(daily["dates"], daily["close"],
+                                    daily.get("volume") or [None] * len(daily["close"])))[-15:]
         ],
         "data_points": len(daily["close"]),
         "currency": quote.get("currency", "USD"),

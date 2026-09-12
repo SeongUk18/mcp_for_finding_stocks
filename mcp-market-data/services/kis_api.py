@@ -363,18 +363,22 @@ def get_fluctuation_rank(
     rank_sort: str = "0",
     min_volume: int = 100000,
     exclude_noise: bool = True,
+    days: int = 0,
 ) -> list[dict[str, Any]]:
     """
     등락률 순위 (FHPST01700000). rank_sort 0:상승 1:하락.
+    days는 누적일수(FID_INPUT_CNT_1) — 0:당일, N:최근 N일 누적 등락률 순위.
+    주말에 days=5로 조회하면 직전 주 누적 급등주가 나온다.
 
     한투가 돌려주는 순서가 등락률 기준으로 정렬돼 있지 않아서
     (상승 조회인데 8%가 1위, 30%가 2위로 오는 식) 여기서 다시 정렬한다.
     """
+    days = max(0, days)
     res = _checked(
         _kis_request(f"{RANK}/fluctuation", "FHPST01700000", {
             "FID_COND_MRKT_DIV_CODE": "J", "FID_COND_SCR_DIV_CODE": "20170",
             "FID_INPUT_ISCD": "0000", "FID_RANK_SORT_CLS_CODE": rank_sort,
-            "FID_INPUT_CNT_1": "0", "FID_PRC_CLS_CODE": "0",
+            "FID_INPUT_CNT_1": str(days), "FID_PRC_CLS_CODE": "0",
             "FID_INPUT_PRICE_1": "", "FID_INPUT_PRICE_2": "", "FID_VOL_CNT": str(min_volume),
             "FID_TRGT_CLS_CODE": "0", "FID_TRGT_EXLS_CLS_CODE": "0",
             "FID_DIV_CLS_CODE": "0", "FID_RSFL_RATE1": "", "FID_RSFL_RATE2": "",
@@ -395,8 +399,11 @@ def get_fluctuation_rank(
 
     if exclude_noise:
         items = [it for it in items if not is_etf_like(it["name"])]
-    items.sort(key=lambda x: (x["change_pct"] is None, x["change_pct"] or 0),
-               reverse=(rank_sort == "0"))
+    if days == 0:
+        # change_pct는 전일 대비라서, 누적 조회(days>0)에서는 이 값으로
+        # 재정렬하면 누적 순위가 깨진다. 그때는 한투 응답 순서를 유지한다.
+        items.sort(key=lambda x: (x["change_pct"] is None, x["change_pct"] or 0),
+                   reverse=(rank_sort == "0"))
     for n, it in enumerate(items, 1):
         it["rank"] = n
     return items

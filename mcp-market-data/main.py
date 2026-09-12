@@ -78,6 +78,7 @@ def get_kr_market_movers(
     min_price: int = 0,
     max_price: int = 1000000,
     exclude_noise: bool = True,
+    period_days: int = 0,
 ) -> str:
     """
     오늘 실제로 움직인 국내 종목을 훑습니다. 유튜브 스캔과 별개인 후보 발굴 채널입니다.
@@ -93,9 +94,13 @@ def get_kr_market_movers(
     - min_price / max_price: 가격 구간 필터
     - exclude_noise: ETF·ETN·인버스·우선주·관리종목·스팩 제외 (기본 True)
       끄면 상위가 KODEX 인버스 같은 ETF로 도배되니 웬만하면 켜두세요.
+    - period_days: 등락률 누적일수 — 0:당일(기본), N:최근 N일 누적 (surge·plunge에만 적용)
+      주말에 period_days=5로 조회하면 직전 주 누적 급등주 순위가 나옵니다.
+      누적 조회 시 items의 change_pct는 여전히 전일 대비이고, 순위 자체가 누적 기준입니다.
 
     순위는 관심도·변동성 지표일 뿐 매수 신호가 아닙니다.
-    등락률 순위는 한투 응답 순서가 등락률과 일치하지 않아 서버에서 다시 정렬합니다.
+    당일(period_days=0) 등락률 순위는 한투 응답 순서가 등락률과 일치하지 않아
+    서버에서 다시 정렬합니다. 누적 조회(period_days>0)는 한투 순서를 그대로 씁니다.
     """
     try:
         if category == "volume":
@@ -104,12 +109,12 @@ def get_kr_market_movers(
             label = "거래량"
         elif category == "surge":
             items = kis.get_fluctuation_rank(rank_sort="0", min_volume=min_volume,
-                                             exclude_noise=exclude_noise)
-            label = "등락률 상위"
+                                             exclude_noise=exclude_noise, days=period_days)
+            label = "등락률 상위" if period_days == 0 else f"등락률 상위(최근 {period_days}일 누적)"
         elif category == "plunge":
             items = kis.get_fluctuation_rank(rank_sort="1", min_volume=min_volume,
-                                             exclude_noise=exclude_noise)
-            label = "등락률 하위"
+                                             exclude_noise=exclude_noise, days=period_days)
+            label = "등락률 하위" if period_days == 0 else f"등락률 하위(최근 {period_days}일 누적)"
         elif category == "power":
             items = kis.get_volume_power_rank(min_price=min_price, max_price=max_price,
                                               min_volume=min_volume, exclude_noise=exclude_noise)
@@ -226,7 +231,8 @@ def get_current_price_and_chart(
         },
         "technicals": technicals,
         "recent_daily": [
-            {"date": b["date"], "close": b["close"], "high": b.get("high"), "low": b.get("low")}
+            {"date": b["date"], "close": b["close"], "high": b.get("high"), "low": b.get("low"),
+             "volume": b.get("volume")}
             for b in bars[-15:]
         ],
         "unit": "원",
