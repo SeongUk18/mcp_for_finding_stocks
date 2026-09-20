@@ -317,7 +317,10 @@ def get_profile(symbol: str, info: dict[str, Any] | None = None) -> dict[str, An
         "beta": _clean(info.get("beta")),
         "trailing_pe": _clean(info.get("trailingPE")),
         "forward_pe": _clean(info.get("forwardPE")),
-        "earnings_date": _epoch_to_date(info.get("earningsTimestamp")),
+        # earningsTimestamp는 직전(이미 지난) 실적일이다. 실적 임박 판단에는
+        # 차기 실적일(earningsTimestampStart)을 써야 한다.
+        "earnings_date_prev": _epoch_to_date(info.get("earningsTimestamp")),
+        "earnings_date_next": _epoch_to_date(info.get("earningsTimestampStart")),
     }
 
 

@@ -20,8 +20,9 @@ from services.indicators import analyze_technicals
 
 mcp = FastMCP("market-data", json_response=True)
 
-# 한투 투자자 매매 대금은 천원 단위로 온다. 원으로 환산해서 내보낸다.
-INVESTOR_AMT_MULTIPLIER = 1000
+# 한투 투자자 매매 대금은 백만원 단위로 온다. 원으로 환산해서 내보낸다.
+# (삼성전자 실측: raw -434,923 vs 수량 1,673,323주 x 260,000원 = -4,350억원)
+INVESTOR_AMT_MULTIPLIER = 1_000_000
 
 
 def _dump(payload: dict[str, Any]) -> str:

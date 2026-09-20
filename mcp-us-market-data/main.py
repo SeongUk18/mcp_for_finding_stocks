@@ -436,7 +436,8 @@ def get_us_news_sentiment(symbol: str, limit: int = 15, include_korean: bool = T
     korean_news는 한글 속보 제목이라 재료 성격을 빠르게 훑는 데 유용합니다.
 
     이 도구는 호재/악재 점수를 매기지 않습니다.
-    실적 발표일(profile.earnings_date)이 임박했는지도 같이 확인하세요.
+    차기 실적 발표일(profile.earnings_date_next)이 임박했는지도 같이 확인하세요.
+    profile.earnings_date_prev는 이미 지난 직전 실적일이라 임박 판단에 쓰면 안 됩니다.
     """
     symbol = symbol.strip().upper()
     if not symbol:
