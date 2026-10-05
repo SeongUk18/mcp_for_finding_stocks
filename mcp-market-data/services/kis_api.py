@@ -367,6 +367,8 @@ def get_fluctuation_rank(
 ) -> list[dict[str, Any]]:
     """
     등락률 순위 (FHPST01700000). rank_sort 0:상승 1:하락.
+    FID_PRC_CLS_CODE는 1(전일 종가 대비)이어야 한다. 0이면 저가 대비 상승률 순위가 와서
+    장중 저가에서 반등한 하락 종목이 섞이고 시가부터 강했던 급등주가 빠진다.
     days는 누적일수(FID_INPUT_CNT_1) — 0:당일, N:최근 N일 누적 등락률 순위.
     주말에 days=5로 조회하면 직전 주 누적 급등주가 나온다.
 
@@ -378,7 +380,7 @@ def get_fluctuation_rank(
         _kis_request(f"{RANK}/fluctuation", "FHPST01700000", {
             "FID_COND_MRKT_DIV_CODE": "J", "FID_COND_SCR_DIV_CODE": "20170",
             "FID_INPUT_ISCD": "0000", "FID_RANK_SORT_CLS_CODE": rank_sort,
-            "FID_INPUT_CNT_1": str(days), "FID_PRC_CLS_CODE": "0",
+            "FID_INPUT_CNT_1": str(days), "FID_PRC_CLS_CODE": "1",
             "FID_INPUT_PRICE_1": "", "FID_INPUT_PRICE_2": "", "FID_VOL_CNT": str(min_volume),
             "FID_TRGT_CLS_CODE": "0", "FID_TRGT_EXLS_CLS_CODE": "0",
             "FID_DIV_CLS_CODE": "0", "FID_RSFL_RATE1": "", "FID_RSFL_RATE2": "",
