@@ -80,6 +80,17 @@ def search_youtube_keywords(
         "video_count": len(videos),
         "videos_with_transcript": sum(1 for v in videos if v.transcript_text),
     }
+    failures: dict[str, int] = {}
+    for v in videos:
+        if v.transcript_error:
+            failures[v.transcript_error] = failures.get(v.transcript_error, 0) + 1
+    if failures:
+        payload["transcript_errors"] = failures
+        if failures.get("IpBlocked"):
+            payload["transcript_note"] = (
+                "YouTube가 이 PC의 IP를 일시 차단해 자막을 못 받았습니다(IpBlocked). "
+                "보통 몇 시간 뒤 풀립니다. 그동안은 제목·설명에서만 종목을 검출합니다."
+            )
 
     if auto_detect:
         try:
@@ -95,6 +106,8 @@ def search_youtube_keywords(
     for v in videos:
         row = v.to_dict()
         text = row.pop("transcript_text")
+        if not row.get("transcript_error"):
+            row.pop("transcript_error", None)
         row["transcript_chars"] = len(text) if text else 0
         if transcript_mode == "full":
             row["transcript_text"] = text

@@ -8,6 +8,7 @@ YouTube 메타데이터/자막 수집 유틸리티.
 """
 from __future__ import annotations
 
+import html
 import os
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
@@ -37,6 +38,7 @@ class YouTubeVideo:
     view_count: int | None = None
     like_count: int | None = None
     transcript_text: str | None = None
+    transcript_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -101,25 +103,28 @@ def _fetch_video_stats(
     return stats
 
 
-def _fetch_transcript_text(video_id: str) -> str | None:
+def _fetch_transcript_text(video_id: str) -> tuple[str | None, str | None]:
     """
     youtube-transcript-api 를 사용해 자막을 텍스트로 가져온다.
     가능한 경우 한국어 우선, 없으면 영어 등 다른 언어도 허용.
+
+    (자막, 실패 사유) 를 돌려준다. IpBlocked처럼 채널 전체가 무효가 되는 실패는
+    사유를 남겨야 리포트가 "자막 없음"과 "차단됨"을 구분할 수 있다.
     """
     preferred_languages = ["ko", "ko-KR", "en", "en-US"]
 
     try:
         api = YouTubeTranscriptApi()
         fetched = api.fetch(video_id, languages=preferred_languages)
-    except (TranscriptsDisabled, NoTranscriptFound):
-        return None
-    except Exception:
+    except (TranscriptsDisabled, NoTranscriptFound) as e:
+        return None, type(e).__name__
+    except Exception as e:
         # 네트워크, 레이트리밋, IpBlocked 등 다양한 예외가 발생할 수 있으므로
-        # MCP 서버 전체에 영향을 주지 않도록 조용히 무시하고 None 반환.
-        return None
+        # MCP 서버 전체에 영향을 주지 않도록 사유만 남기고 계속 진행한다.
+        return None, type(e).__name__
 
     # 단순히 텍스트를 공백으로 이어 붙여 LLM이 자유롭게 분석하게 한다.
-    return " ".join(getattr(snippet, "text", "") for snippet in fetched)
+    return " ".join(getattr(snippet, "text", "") for snippet in fetched), None
 
 
 def collect_youtube_videos(
@@ -152,8 +157,9 @@ def collect_youtube_videos(
                 if not video_id:
                     continue
                 snippet = item.get("snippet") or {}
-                title = snippet.get("title", "")
-                description = snippet.get("description", "")
+                # search API는 제목·설명을 HTML 이스케이프(&quot; 등)해서 준다
+                title = html.unescape(snippet.get("title", ""))
+                description = html.unescape(snippet.get("description", ""))
                 published_at = snippet.get("publishedAt", "")
                 channel_title = snippet.get("channelTitle")
 
@@ -183,7 +189,7 @@ def collect_youtube_videos(
                     v.like_count = None
 
                 if include_transcript:
-                    v.transcript_text = _fetch_transcript_text(v.video_id)
+                    v.transcript_text, v.transcript_error = _fetch_transcript_text(v.video_id)
 
             videos.extend(channel_videos)
 

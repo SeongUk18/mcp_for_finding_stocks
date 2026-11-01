@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import time
 import zipfile
 from typing import Any
@@ -52,6 +53,8 @@ ALIASES = {
     "두산에너빌": "034020",
     "한화에어로": "012450",
 }
+
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+|\b[\w.-]+\.(?:com|net|kr|co|io|me|tv|ly)(?:/\S*)?", re.IGNORECASE)
 
 _trie: dict[str, Any] | None = None
 _loaded_at = 0.0
@@ -137,7 +140,9 @@ def find_stock_mentions(text: str) -> list[tuple[int, int, dict[str, str]]]:
     ("하이닉스" 안의 "이닉스", "정기 아파"의 "기아") 건너뛴다.
     """
     trie = _build_trie()
-    upper = text.upper()
+    # URL 안의 글자("blog.naver.com"의 NAVER 등)는 종목 언급이 아니다. 길이를 유지한 채 공백으로 지워
+    # 반환 인덱스가 원문과 어긋나지 않게 한다.
+    upper = _URL_RE.sub(lambda m: " " * len(m.group(0)), text).upper()
     n = len(upper)
     hits: list[tuple[int, int, dict[str, str]]] = []
     i = 0
