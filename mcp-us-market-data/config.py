@@ -59,6 +59,37 @@ CACHE_DIR = os.getenv("US_MCP_CACHE_DIR", os.path.join(_HERE, ".cache"))
 # 상대강도(RS) 비교 대상. 시세 조회 1회당 벤치마크도 같이 받으므로 짧게 유지.
 BENCHMARKS = [s.strip().upper() for s in os.getenv("BENCHMARKS", "SPY,QQQ").split(",") if s.strip()]
 
+# 업종 상대강도용 ETF. yfinance profile의 industry가 아래에 있으면 그걸, 없으면 sector를 쓴다.
+# 세레니티 테마(반도체·광통신)는 섹터 ETF(XLK)보다 SMH가 실제 비교 대상에 가깝다.
+INDUSTRY_ETFS = {
+    "Semiconductors": "SMH",
+    "Semiconductor Equipment & Materials": "SMH",
+    "Biotechnology": "XBI",
+    "Software - Infrastructure": "IGV",
+    "Software - Application": "IGV",
+    "Aerospace & Defense": "ITA",
+    "Oil & Gas E&P": "XOP",
+    "Banks - Regional": "KRE",
+    "Solar": "TAN",
+    "Gold": "GDX",
+}
+SECTOR_ETFS = {
+    "Technology": "XLK",
+    "Communication Services": "XLC",
+    "Consumer Cyclical": "XLY",
+    "Consumer Defensive": "XLP",
+    "Energy": "XLE",
+    "Financial Services": "XLF",
+    "Healthcare": "XLV",
+    "Industrials": "XLI",
+    "Basic Materials": "XLB",
+    "Real Estate": "XLRE",
+    "Utilities": "XLU",
+}
+
+# SEC EDGAR는 User-Agent가 없으면 403을 준다. 연락처를 넣으라고 권고하므로 필요하면 덮어쓴다.
+SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "pickbot-mcp/1.0 research-tool")
+
 # 캐시태그 오탐 제거용. 통화 기호로 쓰인 $USD 같은 토큰만 걸러낸다.
 # 한 글자 티커(F, T, X 등)는 실제 종목이므로 제외하지 않는다.
 CASHTAG_STOPLIST = {

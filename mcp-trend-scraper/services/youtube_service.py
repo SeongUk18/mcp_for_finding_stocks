@@ -18,6 +18,7 @@ from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, No
 from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
 
 from config import YOUTUBE_API_KEY
+from services.stock_names import find_stock_mentions, snippet
 
 
 
@@ -189,9 +190,82 @@ def collect_youtube_videos(
     return videos
 
 
+def _video_text(v: YouTubeVideo) -> str:
+    return " ".join(p for p in (v.title, v.description, v.transcript_text) if p)
+
+
+def _video_ref(v: YouTubeVideo) -> dict[str, Any]:
+    return {
+        "video_id": v.video_id,
+        "url": v.url,
+        "title": v.title,
+        "channel_title": v.channel_title,
+        "published_at": v.published_at,
+        "view_count": v.view_count,
+    }
+
+
+def keyword_snippets(text: str, keyword: str, max_snippets: int = 2, width: int = 60) -> list[str]:
+    """키워드 주변 문장만 잘라낸다. 자막 전문 대신 논지를 읽는 용도."""
+    out: list[str] = []
+    lower, k = text.lower(), keyword.lower()
+    start = 0
+    while k and len(out) < max_snippets:
+        pos = lower.find(k, start)
+        if pos < 0:
+            break
+        out.append(snippet(text, pos, pos + len(k), width))
+        start = pos + len(k) + width
+    return out
+
+
+def detect_stock_mentions(
+    videos: Iterable[YouTubeVideo],
+    max_snippets_per_video: int = 2,
+    max_tickers: int = 30,
+) -> list[dict[str, Any]]:
+    """
+    제목·설명·자막에서 국내 종목명을 자동으로 찾아 종목별로 집계한다.
+    여러 채널·영상에서 언급될수록 위로 온다 (영상 수 → 총 언급 수 순).
+    """
+    agg: dict[str, dict[str, Any]] = {}
+    for v in videos:
+        text = _video_text(v)
+        per_video: dict[str, list[tuple[int, int]]] = {}
+        stocks: dict[str, dict[str, str]] = {}
+        for start, end, stock in find_stock_mentions(text):
+            per_video.setdefault(stock["code"], []).append((start, end))
+            stocks[stock["code"]] = stock
+        for code, spans in per_video.items():
+            s = stocks[code]
+            entry = agg.setdefault(code, {
+                "name": s["name"], "code": code, "market": s["market"],
+                "total_mentions": 0, "channels": set(), "videos": [],
+            })
+            entry["total_mentions"] += len(spans)
+            entry["channels"].add(v.channel_title or v.channel_id)
+            entry["videos"].append({
+                **_video_ref(v),
+                "mentions": len(spans),
+                "in_title": s["name"] in (v.title or ""),
+                "snippets": [snippet(text, a, b) for a, b in spans[:max_snippets_per_video]],
+            })
+
+    out = []
+    for entry in agg.values():
+        entry["video_count"] = len(entry["videos"])
+        entry["channel_count"] = len(entry["channels"])
+        entry["channels"] = sorted(entry["channels"])
+        entry["videos"].sort(key=lambda x: x["mentions"], reverse=True)
+        out.append(entry)
+    out.sort(key=lambda x: (x["channel_count"], x["video_count"], x["total_mentions"]), reverse=True)
+    return out[:max_tickers]
+
+
 def count_keyword_mentions(
     videos: Iterable[YouTubeVideo],
     keywords: list[str],
+    with_snippets: bool = True,
 ) -> dict[str, Any]:
     """
     키워드별로 제목/설명/자막에서 등장 횟수를 단순 카운트한다.
@@ -238,7 +312,10 @@ def count_keyword_mentions(
                 "keyword_counts": video_keyword_counts,
             }
             for k, c in video_keyword_counts.items():
-                per_keyword_videos.setdefault(k, []).append(v_info)
+                info = dict(v_info)
+                if with_snippets:
+                    info["snippets"] = keyword_snippets(base_text, k)
+                per_keyword_videos.setdefault(k, []).append(info)
 
     for k in normalized_keywords:
         summary["keywords"].append(

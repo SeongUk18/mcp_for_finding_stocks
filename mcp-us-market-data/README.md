@@ -12,6 +12,15 @@
 | `get_us_institutional_flow` | 기관 보유(13F) + 공매도 + 상대강도 + 애널리스트 | `get_institutional_buying` |
 | `get_us_price_and_chart` | 실시간 시세 + 이평/볼린저/ATR + 호가 + 분봉 | `get_current_price_and_chart` |
 | `get_us_news_sentiment` | 영문 + 한글 뉴스 | `search_news_for_trend_keywords` |
+| `get_us_insider_trades` | SEC Form 4 내부자 장내 매수·매도 (키 불필요) | `get_kr_disclosures`의 임원 소유보고 |
+| `backtest_us_rule` | 가격·거래량 규칙 백테스트 (표본 내/외, baseline 비교) | `backtest_kr_rule` |
+
+상대강도에는 SPY·QQQ에 더해 **업종 ETF**가 들어갑니다. yfinance의 industry/sector로 고르며
+(반도체 → SMH, 바이오 → XBI, 그 외 섹터 → XLK·XLF 등) 어떤 ETF인지는 `sector_benchmark`에 있습니다.
+
+Form 4는 거래 후 2영업일 안에 제출돼서 13F(최대 45일 지연)보다 훨씬 빠릅니다. code P(장내 매수)가 가장 의미 있는 신호이고,
+10b5-1 사전 계획 매도는 타이밍 정보가 거의 없습니다. SEC는 User-Agent를 요구하므로 차단되면 `.env`의
+`SEC_USER_AGENT`에 "이름 이메일"을 넣으세요.
 
 ---
 

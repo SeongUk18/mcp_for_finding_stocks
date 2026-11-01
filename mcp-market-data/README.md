@@ -10,6 +10,12 @@
 | **get_current_price_and_chart** | 현재가 + 이평/볼린저/ATR/52주/코스피 대비 상대강도 + 호가 |
 | **get_institutional_buying** | 수급 종합 (확정치·가집계·창구·외국계·프로그램·공매도·융자) |
 | **get_kr_news_and_opinion** | 한투 속보 + 증권사 투자의견·목표주가 + 실적 컨센서스 |
+| **get_kr_disclosures** | DART 공시(성격 분류) + 임원·주요주주 소유보고 + 5% 대량보유 |
+| **backtest_kr_rule** | 가격·거래량 규칙 백테스트 (다음 날 시가 진입, ATR 손절, 표본 내/외, baseline 비교) |
+
+`get_current_price_and_chart`는 코스피·코스닥에 더해 **소속 업종 지수 대비** 상대강도(`vs_index.SECTOR`)와
+**시장경보**(`current.market_warning`: 투자주의/경고/위험·단기과열·거래정지·VI)를 함께 줍니다.
+업종 코드는 한투가 배포하는 종목 마스터(`kospi/kosdaq_code.mst`, 키 불필요)에서 읽고 하루 캐시합니다.
 
 ### 수급 데이터의 성격이 서로 다릅니다
 
@@ -32,6 +38,21 @@
 
 `exclude_noise=True`(기본)를 끄면 거래량 상위가 **KODEX 인버스 같은 ETF로 도배**됩니다.
 한투의 대상제외 마스크(10자리)로 ETF·ETN·우선주·관리종목·스팩을 걸러냅니다.
+투자주의·경고·위험 종목은 일부러 **포함**합니다. 급등주는 투자주의로 지정되는 일이 흔해서
+빼면 단타 후보가 통째로 사라집니다. 경보 여부는 현재가 조회의 `market_warning`으로 확인합니다.
+
+### 공시 (DART)
+
+`get_kr_disclosures`는 [OpenDART](https://opendart.fss.or.kr) 키(무료)가 필요합니다. `.env`에 `DART_API_KEY`를 넣으세요.
+보고서 제목으로 `risk`·`dilution`·`contract`·`earnings`·`shareholder_return`·`ownership`·`corporate_action`을
+붙이지만 이건 공시 성격일 뿐 호재/악재 판단이 아닙니다. 종목코드 없이 부르면 시장 전체 최근 공시를 줍니다.
+
+### 백테스트
+
+`backtest_kr_rule`은 조건을 모두 만족한 날(t일 종가 기준)의 **다음 날 시가**에 진입하고,
+ATR 배수 손절·목표 또는 보유일 만료로 청산합니다. 같은 날 손절가와 목표가를 모두 건드리면 손절로 칩니다.
+최근 30%를 표본 외로 떼어 보고, 조건 없이 매일 샀을 때(`baseline_every_day`)와 비교합니다.
+수급(외인·기관) 이력은 한투 API로 수년치를 받을 수 없어 조건으로 쓸 수 없습니다.
 
 등락률 순위는 한투가 돌려주는 순서가 등락률과 일치하지 않아
 (상승 조회인데 8%가 1위, 30%가 2위로 오는 식) 서버에서 다시 정렬합니다.
@@ -40,6 +61,7 @@
 
 1. **`.env`** 파일에 API 키 입력 (이미 있음, 값만 채우면 됨)
    - `KIS_APPKEY`, `KIS_APPSECRET`: [한국투자증권 API 포털](https://apiportal.koreainvestment.com)에서 앱 등록 후 발급
+   - `DART_API_KEY`: [OpenDART](https://opendart.fss.or.kr)에서 무료 발급 (공시 도구용, 없으면 그 도구만 꺼짐)
 2. 현재 구현은 **조회 전용**(현재가·차트·수급)이라 계좌번호는 사용하지 않음
 
 ## 설치 및 실행 (가상환경 권장)

@@ -183,7 +183,7 @@ def get_daily_bars(ticker_code: str, count: int = 250) -> list[dict[str, Any]]:
     """
     bars: dict[str, dict[str, Any]] = {}
     end = datetime.now()
-    for _ in range(6):
+    for _ in range(max(6, count // 90 + 2)):
         start = end - timedelta(days=150)
         res = _checked(
             get_daily_chart(ticker_code, start_ymd=_ymd(start), end_ymd=_ymd(end)),
@@ -205,7 +205,7 @@ def get_index_daily_bars(index_code: str = INDEX_KOSPI, count: int = 250) -> lis
     """지수 일봉. 상대강도 계산용. 한 번에 50건이라 역시 페이징한다."""
     bars: dict[str, dict[str, Any]] = {}
     end = datetime.now()
-    for _ in range(8):
+    for _ in range(max(8, count // 45 + 3)):
         start = end - timedelta(days=100)
         res = _checked(
             _kis_request(
@@ -310,7 +310,10 @@ def get_asking_price(ticker_code: str) -> dict[str, Any]:
 # 대상 제외 마스크 10자리. 차례대로
 # 투자위험/경고/주의, 관리종목, 정리매매, 불성실공시, 우선주, 거래정지, ETF, ETN, 신용주문불가, SPAC
 # 기본값은 잡주·ETF·인버스를 걸러낸다. 이걸 끄면 순위 상위가 KODEX 인버스로 도배된다.
-EXCLUDE_NOISE = "1111111101"
+# 첫 자리(투자위험/경고/주의)는 일부러 0이다. 급등주는 투자주의로 지정되는 일이 흔해서
+# 이걸 빼면 거래량 순위에서 단타 후보가 통째로 사라진다. 경보 여부는 현재가 조회의
+# market_warning으로 확인한다.
+EXCLUDE_NOISE = "0111111101"
 EXCLUDE_NONE = "0000000000"
 
 # 순위 API가 마스크를 지원하지 않는 경우를 대비한 이름 기반 2차 필터.

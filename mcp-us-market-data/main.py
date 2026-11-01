@@ -7,6 +7,8 @@ Tools:
   - get_us_price_and_chart       : 실시간 시세 + 기술 지표 + 호가 + 분봉
   - get_us_institutional_flow    : 기관 보유(13F) + 공매도 + 애널리스트 (한국 '수급'의 대체)
   - get_us_news_sentiment        : 영문 + 한글 뉴스 원문 메타데이터
+  - get_us_insider_trades        : SEC Form 4 내부자 장내 매수·매도 (2영업일 내 공시)
+  - backtest_us_rule             : 일봉 규칙 백테스트 (표본 내/외 분리, ATR 손절)
 
 시세는 한투 해외주식 API(무료실시간)를 우선 쓰고, 키가 없으면 yfinance로 폴백한다.
 13F·공매도·애널리스트는 한투에 없으므로 항상 yfinance를 쓴다.
@@ -15,13 +17,16 @@ Tools:
 from __future__ import annotations
 
 import json
+import math
 import sys
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from config import BENCHMARKS, kis_enabled
+from config import BENCHMARKS, INDUSTRY_ETFS, SECTOR_ETFS, kis_enabled
+from services import backtest
 from services import kis_overseas as kis
+from services import sec_insider as sec
 from services import serenity_service as serenity
 from services import yf_service as yfs
 from services.indicators import analyze_technicals
@@ -68,6 +73,28 @@ def _merge_today_bar(daily: dict[str, list], kis_bars: list[dict[str, Any]]) -> 
         daily["volume"].append(bar["volume"] or 0)
         appended = d
     return daily, appended
+
+
+def _sector_benchmark(profile: dict[str, Any]) -> dict[str, Any] | None:
+    """종목의 industry/sector에 대응하는 ETF. 대응이 없으면 None."""
+    industry, sector = profile.get("industry"), profile.get("sector")
+    if industry in INDUSTRY_ETFS:
+        return {"etf": INDUSTRY_ETFS[industry], "basis": "industry", "matched": industry}
+    if sector in SECTOR_ETFS:
+        return {"etf": SECTOR_ETFS[sector], "basis": "sector", "matched": sector}
+    return None
+
+
+def _benchmarks_with_sector(profile: dict[str, Any]) -> tuple[dict[str, list[float]], dict[str, Any] | None]:
+    """SPY/QQQ에 업종 ETF를 더한 벤치마크 종가. 종목 자신이 ETF면 중복이라 빼지 않는다."""
+    sector = _sector_benchmark(profile)
+    names = list(BENCHMARKS)
+    if sector and sector["etf"] not in names:
+        names.append(sector["etf"])
+    bench = yfs.get_benchmark_closes(names, period="1y")
+    if sector:
+        sector["available"] = sector["etf"] in bench
+    return bench, sector
 
 
 @mcp.tool()
@@ -221,6 +248,8 @@ def get_us_price_and_chart(
     상대강도(relative_strength)는 SPY/QQQ 대비 초과수익률입니다.
     미국은 일별 외국인·기관 순매수 공시가 없어서, 지수 대비 강도로
     자금 유입 강도를 간접 추정합니다. 양수면 지수보다 강하다는 뜻입니다.
+    vs_benchmark에는 업종 ETF(예: 반도체는 SMH)도 들어가며 어떤 ETF인지는
+    sector_benchmark에 있습니다. 지수 대비는 강한데 업종 대비 약하면 업종 전체에 묻어간 것입니다.
     """
     symbol = symbol.strip().upper()
     if not symbol:
@@ -270,7 +299,8 @@ def get_us_price_and_chart(
         quote["price"] = round(daily["close"][-1], 2)
         quote["_note"] = "실시간 시세를 못 받아 최근 종가로 대체함"
 
-    bench = yfs.get_benchmark_closes(BENCHMARKS, period="1y")
+    profile = yfs.get_profile(symbol)
+    bench, sector_bench = _benchmarks_with_sector(profile)
     technicals = analyze_technicals(
         closes=daily["close"],
         highs=daily["high"],
@@ -300,7 +330,8 @@ def get_us_price_and_chart(
 
     payload: dict[str, Any] = {
         "symbol": symbol,
-        "profile": yfs.get_profile(symbol),
+        "profile": profile,
+        "sector_benchmark": sector_bench,
         "request": {"period": period, "interval": interval},
         "price_source": price_source,
         "current": quote,
@@ -368,6 +399,8 @@ def get_us_institutional_flow(symbol: str) -> str:
         return _err("symbol이 비어 있습니다.")
 
     info, info_err = yfs.get_info(symbol)
+    profile = yfs.get_profile(symbol, info=info)
+    sector_bench: dict[str, Any] | None = None
 
     rs: dict[str, Any] | None = None
     volume_block: dict[str, Any] | None = None
@@ -381,7 +414,7 @@ def get_us_institutional_flow(symbol: str) -> str:
                 daily, appended = _merge_today_bar(daily, kis.get_daily(symbol))
             except Exception:
                 pass
-        bench = yfs.get_benchmark_closes(BENCHMARKS, period="1y")
+        bench, sector_bench = _benchmarks_with_sector(profile)
         tech = analyze_technicals(
             closes=daily["close"],
             highs=daily["high"],
@@ -404,10 +437,11 @@ def get_us_institutional_flow(symbol: str) -> str:
 
     payload = {
         "symbol": symbol,
-        "profile": yfs.get_profile(symbol, info=info),
+        "profile": profile,
         "ownership": yfs.get_ownership(symbol),
         "short_interest": yfs.get_short_interest(symbol, info=info),
         "relative_strength": rs,
+        "sector_benchmark": sector_bench,
         "volume": volume_block,
         "analyst": yfs.get_analyst_view(symbol, info=info),
         "data_freshness": {
@@ -465,6 +499,129 @@ def get_us_news_sentiment(symbol: str, limit: int = 15, include_korean: bool = T
     if not articles:
         payload["note"] = "최근 영문 뉴스를 찾지 못했습니다. 티커가 맞는지 확인하세요."
     return _dump(payload)
+
+
+@mcp.tool()
+def get_us_insider_trades(symbol: str, days: int = 90, max_filings: int = 40, limit: int = 30) -> str:
+    """
+    SEC Form 4(임원·이사·10% 주주의 자사주 거래)를 원본에서 읽어 반환합니다.
+
+    - symbol: 티커 (예: NVDA)
+    - days: 최근 며칠치 제출분 (기본 90)
+    - max_filings: 읽을 Form 4 최대 개수 (하나당 SEC 요청 1회)
+    - limit: transactions 최대 개수
+
+    13F(분기, 최대 45일 지연)와 달리 Form 4는 거래 후 2영업일 안에 제출됩니다.
+    읽는 법:
+      - code P(장내 매수)가 가장 의미 있는 신호입니다. 여러 내부자가 짧은 기간에 같이 사면(클러스터 매수) 더 강합니다.
+      - code S(장내 매도)는 세금·분산 목적이 많아 약한 신호입니다. is_10b5_1_plan=true면 사전 계획 매도라 타이밍 정보가 거의 없습니다.
+      - A(그랜트)·M(옵션 행사)·F(세금 원천징수)·G(증여)는 매매 의사와 무관합니다.
+    summary.open_market_sells_outside_plan은 10b5-1 표시가 없는 매도입니다(구형 서식은 표시 자체가 없어 여기에 섞입니다).
+    """
+    symbol = symbol.strip().upper()
+    if not symbol:
+        return _err("symbol이 비어 있습니다.")
+    try:
+        data = sec.get_insider_transactions(symbol, days=days, max_filings=max_filings)
+    except Exception as e:
+        return _err(f"{symbol} 내부자 거래 조회 실패: {e}", symbol=symbol)
+    data["transactions"] = data["transactions"][:limit]
+    data["data_freshness"] = "거래 후 2영업일 내 제출 (SEC EDGAR 원본)"
+    return _dump(data)
+
+
+BACKTEST_MAX_TICKERS = 40
+
+
+@mcp.tool()
+def backtest_us_rule(
+    symbols: list[str],
+    conditions: list[dict[str, Any]],
+    years: float = 3,
+    stop_atr_mult: float = 1.5,
+    target_atr_mult: float | None = 3.0,
+    max_hold_days: int = 5,
+    cost_pct: float = 0.1,
+    max_entry_gap_pct: float | None = None,
+    oos_fraction: float = 0.3,
+    cooldown_after_losses: int = 0,
+    cooldown_days: int = 0,
+    benchmark: str = "SPY",
+) -> str:
+    """
+    가격·거래량 규칙을 과거 일봉(yfinance, 분할 반영)에 돌려 승률·손익비·낙폭을 계산합니다 (미국).
+    주간 튜닝에서 규칙 후보를 채택하기 전에 수년치로 먼저 검증하는 용도입니다.
+
+    - symbols: 티커 목록 (최대 40개)
+    - conditions: 신호 조건 목록. 모두 만족한 날(t일 종가 기준)의 다음 날 시가에 진입합니다
+        [{"feature": "volume_ratio_avg20", "op": ">=", "value": 1.5},
+         {"feature": "rs_20d", "op": ">", "value": 0}]
+      op: > >= < <= == between
+      feature: ret_1d, ret_5d, ret_20d, gap_pct, body_pct, close_position, volume_ratio_avg20,
+               trade_value($), close_vs_ma5/20/60, ma_aligned, pct_from_52w_high, atr_pct, rsi14,
+               rs_5d, rs_20d (benchmark 대비 %p)
+    - years: 조회 기간 (기본 3년, 최대 10)
+    - stop_atr_mult / target_atr_mult: 손절·목표 = 진입가 ∓ ATR14 x 배수 (target null이면 목표 없음)
+    - max_hold_days: 최대 보유 거래일 (기본 5, 만료일 종가 청산)
+    - cost_pct: 왕복 비용(%) (기본 0.1)
+    - max_entry_gap_pct: 다음 날 시가 갭상승이 이 %를 넘으면 추격 안 함
+    - oos_fraction: 최근 몇 %를 표본 외로 떼어 볼지 (기본 0.3)
+    - cooldown_after_losses / cooldown_days: N연속 손실 후 D일(달력일) 신규 진입 중단
+    - benchmark: rs 계산 기준 (기본 SPY, 반도체 테마면 SMH 등)
+
+    프리마켓 갭은 일봉 시가에만 반영됩니다. 같은 날 손절가·목표가를 모두 건드리면 손절로 칩니다.
+    생존 편향(상장폐지 종목 누락)이 있습니다.
+    """
+    symbols = [s.strip().upper() for s in symbols if s and s.strip()]
+    if not symbols:
+        return _err("symbols가 비어 있습니다.")
+    if len(symbols) > BACKTEST_MAX_TICKERS:
+        return _err(f"symbols는 최대 {BACKTEST_MAX_TICKERS}개입니다 (받은 개수: {len(symbols)}).")
+    if not conditions:
+        return _err("conditions가 비어 있습니다.", features=backtest.FEATURES)
+    problem = backtest.validate_conditions(conditions)
+    if problem:
+        return _err(problem, features=backtest.FEATURES)
+
+    period = f"{min(10, max(1, math.ceil(years)))}y"
+    errors: dict[str, str] = {}
+
+    def _bars(sym: str) -> list[dict[str, Any]]:
+        h = yfs.get_history(sym, period=period, interval="1d")
+        return [
+            {"date": d, "open": o, "high": hi, "low": lo, "close": c, "volume": v}
+            for d, o, hi, lo, c, v in zip(h["dates"], h["open"], h["high"], h["low"], h["close"], h["volume"])
+        ]
+
+    try:
+        bench = {b["date"]: b["close"] for b in _bars(benchmark.upper())}
+    except Exception as e:
+        bench = {}
+        errors[f"benchmark_{benchmark}"] = str(e)
+
+    data: dict[str, list[dict[str, Any]]] = {}
+    for s in symbols:
+        try:
+            data[s] = _bars(s)
+        except Exception as e:
+            errors[s] = str(e)
+
+    result = backtest.run(
+        data, {s: bench for s in data}, conditions,
+        stop_atr_mult=stop_atr_mult, target_atr_mult=target_atr_mult, max_hold_days=max_hold_days,
+        cost_pct=cost_pct, max_entry_gap_pct=max_entry_gap_pct, oos_fraction=oos_fraction,
+        cooldown_after_losses=cooldown_after_losses, cooldown_days=cooldown_days, price_digits=2,
+    )
+    result["config"] = {
+        "symbols": symbols, "period": period, "conditions": conditions,
+        "stop_atr_mult": stop_atr_mult, "target_atr_mult": target_atr_mult,
+        "max_hold_days": max_hold_days, "cost_pct": cost_pct, "max_entry_gap_pct": max_entry_gap_pct,
+        "entry": "신호 다음 날 시가", "benchmark": benchmark.upper(),
+    }
+    result["note"] = "과거 성과는 미래 수익을 보장하지 않습니다. 표본 외 구간과 baseline 대비를 같이 보세요."
+    if errors:
+        result["errors"] = errors
+    return _dump(result)
 
 
 def main() -> None:

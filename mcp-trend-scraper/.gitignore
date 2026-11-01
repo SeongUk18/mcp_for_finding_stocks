@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 *.pyo
 krx_master.csv
+.cache/
