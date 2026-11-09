@@ -11,6 +11,8 @@
 | **get_institutional_buying** | 수급 종합 (확정치·가집계·창구·외국계·프로그램·공매도·융자) |
 | **get_kr_news_and_opinion** | 한투 속보 + 증권사 투자의견·목표주가 + 실적 컨센서스 |
 | **get_kr_disclosures** | DART 공시(성격 분류) + 임원·주요주주 소유보고 + 5% 대량보유 |
+| **get_kr_index_snapshot** | 코스피·코스닥 지수 등락률 + 상승·하락·보합 종목 수 |
+| **get_kr_daily_history** | 종목·지수 과거 일봉 기간 조회 (수정주가, `.cache/daily/` 로컬 캐시) |
 | **backtest_kr_rule** | 가격·거래량 규칙 백테스트 (다음 날 시가 진입, ATR 손절, 표본 내/외, baseline 비교) |
 
 `get_current_price_and_chart`는 코스피·코스닥에 더해 **소속 업종 지수 대비** 상대강도(`vs_index.SECTOR`)와
@@ -30,6 +32,18 @@
 | `foreign_brokers` | 외국계 창구 매매 추이 | 장중 실시간 |
 | `program` | 프로그램매매 순매수 (시간대별) | 장중 실시간 |
 | `short_sale` / `loan` | 공매도 비중 / 신용융자 잔고 | 전 거래일까지 |
+
+한투 일별 투자자 API는 당일 행을 장 종료 후에야 채웁니다. 그 전에는 금액 API가 당일 행을 0으로 주고,
+수량 API가 당일 시세를 전 거래일 날짜로 붙여 주는 일이 있습니다. 그래서 행 순서가 아니라
+`stck_bsop_date`로만 날짜를 붙이고, 당일 0값 행은 `unconfirmed_dates`로 빼서 합계에서 제외합니다.
+일봉과 대조해 다른 날짜 값이 붙은 행은 `daily_detail.excluded_rows`로 빼고 `errors.date_check`에 남깁니다.
+`as_of_date`(마지막 확정일)와 `today_included`로 오늘 수급이 들어 있는지 확인하세요.
+
+### 분봉
+
+`get_current_price_and_chart(chart_type="5min")`처럼 분봉을 고르면 하루치 1분봉을 시각을 되감으며 모아
+(당일 30건, 과거 날짜 120건씩) 겹치는 봉을 지우고 N분봉으로 묶습니다. `date=YYYYMMDD`로 과거 날짜도 됩니다.
+분봉이 없거나 실패하면 `errors.minute_chart`에 남기고 **일봉으로 대체하지 않습니다**.
 
 창구 분석이 핵심입니다. JP모간·골드만·UBS 같은 외국계 창구가 매수 상위에 있으면
 외국인 자금 유입으로 해석하는 게 일반적입니다.

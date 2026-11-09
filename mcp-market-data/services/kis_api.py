@@ -107,18 +107,103 @@ def get_price(ticker_code: str) -> dict[str, Any]:
     )
 
 
-def get_minute_chart(ticker_code: str, interval: str = "15") -> dict[str, Any]:
-    """분봉 차트 (FHKST03010200)."""
-    return _kis_request(
-        f"{Q}/inquire-time-itemchartprice",
-        "FHKST03010200",
-        {
-            "FID_COND_MRKT_DIV_CODE": "J",
-            "FID_INPUT_ISCD": ticker_code,
-            "FID_INPUT_HOUR_1": "153000",
-            "FID_PW_DATA_INCU_YN": "N",
-        },
-    )
+# 분봉. 당일은 30건, 과거 날짜는 120건씩 시각을 되감으며 받는다.
+MINUTE_TODAY_TR = "FHKST03010200"
+MINUTE_PAST_TR = "FHKST03010230"
+MARKET_OPEN_HOUR = "090000"
+MARKET_CLOSE_HOUR = "153000"
+
+
+def _minute_page(ticker_code: str, date: str, hour: str, today: bool) -> list[dict[str, Any]]:
+    if today:
+        path, tr_id = f"{Q}/inquire-time-itemchartprice", MINUTE_TODAY_TR
+        params = {"FID_ETC_CLS_CODE": "", "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker_code,
+                  "FID_INPUT_HOUR_1": hour, "FID_PW_DATA_INCU_YN": "N"}
+    else:
+        path, tr_id = f"{Q}/inquire-time-dailychartprice", MINUTE_PAST_TR
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker_code, "FID_INPUT_HOUR_1": hour,
+                  "FID_INPUT_DATE_1": date, "FID_PW_DATA_INCU_YN": "N", "FID_FAKE_TICK_INCU_YN": ""}
+    res = _checked(_kis_request(path, tr_id, params), tr_id)
+    return parse_minute_rows(_rows(res, "output2"))
+
+
+def parse_minute_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """분봉 행. 종가는 stck_prpr이다 (일봉의 stck_clpr가 아님)."""
+    out = []
+    for r in rows:
+        date, hour, close = r.get("stck_bsop_date"), r.get("stck_cntg_hour"), f(r.get("stck_prpr"))
+        if not date or not hour or close is None:
+            continue
+        out.append({
+            "date": date,
+            "time": hour,
+            "open": f(r.get("stck_oprc")) or close,
+            "high": f(r.get("stck_hgpr")) or close,
+            "low": f(r.get("stck_lwpr")) or close,
+            "close": close,
+            "volume": i(r.get("cntg_vol")) or 0,
+        })
+    return out
+
+
+def _minus_one_minute(hour: str) -> str:
+    return (datetime.strptime(hour, "%H%M%S") - timedelta(minutes=1)).strftime("%H%M%S")
+
+
+def collect_minute_bars(pages, date: str, start_hour: str, max_pages: int) -> list[dict[str, Any]]:
+    """
+    pages(hour) -> 그 시각 이전 분봉 목록. 시각을 되감으며 하루치를 모은다.
+    페이지끼리 겹치는 봉은 시각 기준으로 한 번만 남기고, 다른 날짜 봉은 버린다.
+    """
+    bars: dict[str, dict[str, Any]] = {}
+    hour = start_hour
+    for _ in range(max_pages):
+        rows = [r for r in pages(hour) if r["date"] == date]
+        new = [r for r in rows if r["time"] not in bars]
+        if not new:
+            break
+        for r in new:
+            bars[r["time"]] = r
+        earliest = min(r["time"] for r in rows)
+        if earliest <= MARKET_OPEN_HOUR:
+            break
+        hour = _minus_one_minute(earliest)
+    return [bars[k] for k in sorted(bars)]
+
+
+def get_minute_bars(ticker_code: str, date: str | None = None) -> list[dict[str, Any]]:
+    """
+    하루치 1분봉. date(YYYYMMDD)가 없거나 오늘이면 당일 분봉(FHKST03010200, 30건씩),
+    과거면 일자별 분봉(FHKST03010230, 120건씩)을 쓴다. 휴장일이면 빈 목록이다.
+    """
+    now = datetime.now()
+    today = _ymd(now)
+    date = date or today
+    if date == today:
+        start = min(now.strftime("%H%M%S"), MARKET_CLOSE_HOUR)
+        return collect_minute_bars(lambda h: _minute_page(ticker_code, date, h, True), date, start, 16)
+    return collect_minute_bars(lambda h: _minute_page(ticker_code, date, h, False),
+                               date, MARKET_CLOSE_HOUR, 6)
+
+
+def aggregate_minute_bars(bars: list[dict[str, Any]], minutes: int) -> list[dict[str, Any]]:
+    """1분봉을 N분봉으로 묶는다. 봉 시각은 구간 시작 시각(09:00, 09:05 ...)이다."""
+    if minutes <= 1:
+        return [dict(b) for b in bars]
+    out: list[dict[str, Any]] = []
+    for b in bars:
+        h, m = int(b["time"][:2]), int(b["time"][2:4])
+        start = (h * 60 + m) // minutes * minutes
+        key = f"{start // 60:02d}{start % 60:02d}00"
+        if out and out[-1]["time"] == key and out[-1]["date"] == b["date"]:
+            cur = out[-1]
+            cur["high"] = max(cur["high"], b["high"])
+            cur["low"] = min(cur["low"], b["low"])
+            cur["close"] = b["close"]
+            cur["volume"] += b["volume"]
+        else:
+            out.append({**b, "time": key})
+    return out
 
 
 def get_investor_trend(ticker_code: str) -> dict[str, Any]:
@@ -174,39 +259,32 @@ def _parse_ohlcv(rows: list[dict[str, Any]], close_key: str) -> list[dict[str, A
     return out
 
 
-def get_daily_bars(ticker_code: str, count: int = 250) -> list[dict[str, Any]]:
-    """
-    일봉을 count개 이상 모을 때까지 구간을 뒤로 밀며 페이징한다.
-
-    한투 일봉 API는 한 번에 최대 100건이라, 이렇게 하지 않으면
-    MA200이나 60일 상대강도를 계산할 수 없다.
-    """
+def _page_back(fetch, end: datetime, window_days: int, enough, max_pages: int) -> dict[str, dict[str, Any]]:
+    """fetch(start_ymd, end_ymd)로 구간을 뒤로 밀며 모은다. enough(bars)가 참이면 멈춘다."""
     bars: dict[str, dict[str, Any]] = {}
-    end = datetime.now()
-    for _ in range(max(6, count // 90 + 2)):
-        start = end - timedelta(days=150)
-        res = _checked(
-            get_daily_chart(ticker_code, start_ymd=_ymd(start), end_ymd=_ymd(end)),
-            "FHKST03010100",
-        )
-        rows = _parse_ohlcv(_rows(res, "output2", "output1", "output"), "stck_clpr")
+    for _ in range(max_pages):
+        start = end - timedelta(days=window_days)
+        rows = fetch(_ymd(start), _ymd(end))
         if not rows:
             break
         before = len(bars)
         for b in rows:
             bars[b["date"]] = b
-        if len(bars) >= count or len(bars) == before:
+        if len(bars) == before or enough(bars):
             break
         end = datetime.strptime(min(bars), "%Y%m%d") - timedelta(days=1)
-    return [bars[k] for k in sorted(bars)][-count:]
+    return bars
 
 
-def get_index_daily_bars(index_code: str = INDEX_KOSPI, count: int = 250) -> list[dict[str, Any]]:
-    """지수 일봉. 상대강도 계산용. 한 번에 50건이라 역시 페이징한다."""
-    bars: dict[str, dict[str, Any]] = {}
-    end = datetime.now()
-    for _ in range(max(8, count // 45 + 3)):
-        start = end - timedelta(days=100)
+def _fetch_stock_daily(ticker_code: str):
+    def fetch(start_ymd: str, end_ymd: str) -> list[dict[str, Any]]:
+        res = _checked(get_daily_chart(ticker_code, start_ymd=start_ymd, end_ymd=end_ymd), "FHKST03010100")
+        return _parse_ohlcv(_rows(res, "output2", "output1", "output"), "stck_clpr")
+    return fetch
+
+
+def _fetch_index_daily(index_code: str):
+    def fetch(start_ymd: str, end_ymd: str) -> list[dict[str, Any]]:
         res = _checked(
             _kis_request(
                 f"{Q}/inquire-daily-indexchartprice",
@@ -214,27 +292,67 @@ def get_index_daily_bars(index_code: str = INDEX_KOSPI, count: int = 250) -> lis
                 {
                     "FID_COND_MRKT_DIV_CODE": "U",
                     "FID_INPUT_ISCD": index_code,
-                    "FID_INPUT_DATE_1": _ymd(start),
-                    "FID_INPUT_DATE_2": _ymd(end),
+                    "FID_INPUT_DATE_1": start_ymd,
+                    "FID_INPUT_DATE_2": end_ymd,
                     "FID_PERIOD_DIV_CODE": "D",
                 },
             ),
             "FHKUP03500100",
         )
-        rows = _parse_ohlcv(_rows(res, "output2"), "bstp_nmix_prpr")
-        if not rows:
-            break
-        before = len(bars)
-        for b in rows:
-            bars[b["date"]] = b
-        if len(bars) >= count or len(bars) == before:
-            break
-        end = datetime.strptime(min(bars), "%Y%m%d") - timedelta(days=1)
+        return _parse_ohlcv(_rows(res, "output2"), "bstp_nmix_prpr")
+    return fetch
+
+
+def get_daily_bars(ticker_code: str, count: int = 250) -> list[dict[str, Any]]:
+    """
+    일봉을 count개 이상 모을 때까지 구간을 뒤로 밀며 페이징한다.
+
+    한투 일봉 API는 한 번에 최대 100건이라, 이렇게 하지 않으면
+    MA200이나 60일 상대강도를 계산할 수 없다.
+    """
+    bars = _page_back(_fetch_stock_daily(ticker_code), datetime.now(), 150,
+                      lambda b: len(b) >= count, max(6, count // 90 + 2))
     return [bars[k] for k in sorted(bars)][-count:]
 
 
+def get_index_daily_bars(index_code: str = INDEX_KOSPI, count: int = 250) -> list[dict[str, Any]]:
+    """지수 일봉. 상대강도 계산용. 한 번에 50건이라 역시 페이징한다."""
+    bars = _page_back(_fetch_index_daily(index_code), datetime.now(), 100,
+                      lambda b: len(b) >= count, max(8, count // 45 + 3))
+    return [bars[k] for k in sorted(bars)][-count:]
+
+
+def get_daily_bars_range(code: str, start_ymd: str, end_ymd: str, index: bool = False) -> list[dict[str, Any]]:
+    """
+    start~end 구간 일봉(수정주가). get_daily_bars와 같은 요청·파싱을 쓴다.
+    index=True면 업종·지수 코드(0001 코스피, 1001 코스닥)로 조회한다.
+    """
+    start = datetime.strptime(start_ymd, "%Y%m%d")
+    end = datetime.strptime(end_ymd, "%Y%m%d")
+    if index:
+        fetch, window, per_page = _fetch_index_daily(code), 100, 45
+    else:
+        fetch, window, per_page = _fetch_stock_daily(code), 150, 90
+    pages = (end - start).days * 250 // 365 // per_page + 3
+    bars = _page_back(fetch, end, window, lambda b: min(b) <= start_ymd, pages)
+    return [bars[k] for k in sorted(bars) if start_ymd <= k <= end_ymd]
+
+
+def signed(value: Any, sign_code: Any) -> float | None:
+    """
+    한투 대비 부호 코드(1 상한, 2 상승, 3 보합, 4 하한, 5 하락)를 반영한다.
+    값에 이미 '-'가 붙어 오면 그대로 쓴다.
+    """
+    v = f(value)
+    if v is None:
+        return None
+    if str(sign_code or "").strip() in ("4", "5") and v > 0:
+        return -v
+    return v
+
+
 def get_index_price(index_code: str = INDEX_KOSPI) -> dict[str, Any]:
-    """지수 현재가 (FHPUP02100000)."""
+    """지수 현재가 (FHPUP02100000). 상승·하락 종목 수 포함."""
     res = _checked(
         _kis_request(
             f"{Q}/inquire-index-price",
@@ -243,15 +361,26 @@ def get_index_price(index_code: str = INDEX_KOSPI) -> dict[str, Any]:
         ),
         "FHPUP02100000",
     )
-    o = _one(res)
+    return parse_index_price(_one(res), index_code)
+
+
+def parse_index_price(o: dict[str, Any], index_code: str) -> dict[str, Any]:
+    sign = o.get("prdy_vrss_sign")
     return {
         "index_code": index_code,
         "value": f(o.get("bstp_nmix_prpr")),
-        "change": f(o.get("bstp_nmix_prdy_vrss")),
-        "change_pct": f(o.get("bstp_nmix_prdy_ctrt")),
+        "change": signed(o.get("bstp_nmix_prdy_vrss"), sign),
+        "change_pct": signed(o.get("bstp_nmix_prdy_ctrt"), sign),
         "open": f(o.get("bstp_nmix_oprc")),
         "high": f(o.get("bstp_nmix_hgpr")),
         "low": f(o.get("bstp_nmix_lwpr")),
+        "advancers": i(o.get("ascn_issu_cnt")),
+        "upper_limit_count": i(o.get("uplm_issu_cnt")),
+        "unchanged": i(o.get("stnr_issu_cnt")),
+        "decliners": i(o.get("down_issu_cnt")),
+        "lower_limit_count": i(o.get("lslm_issu_cnt")),
+        "volume_thousand_shares": i(o.get("acml_vol")),
+        "trade_value_million_krw": i(o.get("acml_tr_pbmn")),
     }
 
 
@@ -661,7 +790,7 @@ def get_investor_by_stock_daily(ticker_code: str, days: int = 20) -> list[dict[s
     res = _checked(
         _kis_request(f"{Q}/investor-trade-by-stock-daily", "FHPTJ04160001", {
             "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker_code,
-            "FID_INPUT_DATE_1": "", "FID_ORG_ADJ_PRC": "", "FID_ETC_CLS_CODE": "",
+            "FID_INPUT_DATE_1": _ymd(datetime.now()), "FID_ORG_ADJ_PRC": "", "FID_ETC_CLS_CODE": "",
         }),
         "FHPTJ04160001",
     )

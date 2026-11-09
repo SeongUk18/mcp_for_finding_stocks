@@ -7,18 +7,24 @@ Tools:
   - get_institutional_buying    : 외인·기관 수급 종합 (확정치·가집계·창구·외국계·프로그램·공매도·융자)
   - get_kr_news_and_opinion     : 한투 속보 + 증권사 투자의견·목표주가 + 실적 컨센서스
   - get_kr_disclosures          : DART 공시 (성격 분류) + 임원·주요주주 소유보고 + 5% 대량보유
+  - get_kr_index_snapshot       : 코스피·코스닥 지수 등락률 + 상승·하락 종목 수
+  - get_kr_daily_history        : 종목·지수 과거 일봉 기간 조회 (로컬 캐시)
   - backtest_kr_rule            : 일봉 규칙 백테스트 (표본 내/외 분리, ATR 손절)
 
 모든 도구는 수치와 원문만 반환한다. 호재/악재 판단은 LLM이 한다.
 """
 import json
+import re
 import sys
+from datetime import datetime, timedelta
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from services import backtest
 from services import dart_api as dart
+from services import daily_history
+from services import investor_daily
 from services import kis_api as kis
 from services import krx_master
 from services.indicators import analyze_technicals
@@ -88,19 +94,42 @@ def _parse_market_warning(o: dict[str, Any]) -> dict[str, Any]:
     return flags
 
 
-def _parse_minute_chart(res: dict[str, Any]) -> list[dict[str, Any]]:
-    """분봉 응답에서 시간·가격 리스트 추출."""
-    out = []
-    for row in kis._rows(res, "output2", "output1", "output"):
-        prc = row.get("stck_prpr") or row.get("cntg_prpr")
-        if prc is None:
-            continue
-        out.append({
-            "time": row.get("stck_cntg_hour") or row.get("cntg_hour") or "",
-            "price": kis.i(prc),
-            "volume": kis.i(row.get("cntg_vol")),
-        })
-    return out
+MINUTE_INTERVALS = (1, 3, 5, 10, 15, 30, 60)
+
+
+def _minute_interval(chart_type: str) -> int | None:
+    """'5min'·'5m'·'5' → 5. 일봉이면 None."""
+    if not chart_type or chart_type.lower() in ("day", "d", "daily"):
+        return None
+    m = re.fullmatch(r"(\d+)\s*(min|m|분)?", chart_type.strip().lower())
+    if not m or int(m.group(1)) not in MINUTE_INTERVALS:
+        raise ValueError(f"지원하지 않는 chart_type: {chart_type} (가능: day, "
+                         + ", ".join(f"{n}min" for n in MINUTE_INTERVALS) + ")")
+    return int(m.group(1))
+
+
+def _minute_payload(ticker_code: str, minutes: int, date: str) -> tuple[dict[str, Any], str | None]:
+    """분봉 블록과 오류 메시지. 분봉이 없거나 실패해도 일봉으로 대체하지 않는다."""
+    day = date or datetime.now().strftime("%Y%m%d")
+    block: dict[str, Any] = {"date": day, "bars_interval": f"{minutes}min", "bars_count": 0,
+                             "first_bar": None, "last_bar": None, "bars": []}
+    try:
+        one_min = kis.get_minute_bars(ticker_code, day)
+    except Exception as e:
+        return block, f"분봉 조회 실패(일봉으로 대체하지 않음): {e}"
+    if not one_min:
+        return block, f"{day} 분봉이 없습니다. 휴장일이거나 장 시작 전입니다(일봉으로 대체하지 않음)."
+    bars = [{k: b[k] for k in ("time", "open", "high", "low", "close", "volume")}
+            for b in kis.aggregate_minute_bars(one_min, minutes)]
+    block.update({
+        "bars_count": len(bars),
+        "first_bar": bars[0]["time"],
+        "last_bar": bars[-1]["time"],
+        "bars": bars,
+        "note": "봉 시각은 구간 시작 시각(HHMMSS)입니다. 09:00 봉에는 시가 단일가, 15:30 봉에는 "
+                "종가 단일가 체결이 들어 있습니다. 거래가 없던 분은 봉이 없습니다.",
+    })
+    return block, None
 
 
 @mcp.tool()
@@ -181,12 +210,16 @@ def get_current_price_and_chart(
     chart_type: str = "day",
     include_orderbook: bool = False,
     include_relative_strength: bool = True,
+    date: str = "",
 ) -> str:
     """
     특정 종목의 현재가·고저·거래량과 이평/볼린저/ATR/52주/상대강도 등 원시 수치를 반환합니다.
 
     - ticker_code: 종목코드 6자리 (예: 005930)
-    - chart_type: 1min, 5min, 15min, 60min, day 중 하나
+    - chart_type: day(기본) 또는 1min, 3min, 5min, 10min, 15min, 30min, 60min
+      분봉을 고르면 minute에 하루치 봉(bars)과 bars_interval·bars_count·first_bar·last_bar가 옵니다.
+      분봉이 없거나 실패하면 errors.minute_chart에 사유를 남기며, 일봉으로 대체하지 않습니다.
+    - date: 분봉 날짜 YYYYMMDD. 비우면 오늘. 과거 날짜 분봉 조회에 씁니다 (휴장일이면 빈 결과)
     - include_orderbook: 호가 10단계와 예상체결가를 함께 반환할지
     - include_relative_strength: 코스피·코스닥·소속 업종 지수 대비 초과수익률 계산 여부
       (지수 시세를 추가로 조회하므로 필요 없으면 False로 끄세요)
@@ -204,6 +237,13 @@ def get_current_price_and_chart(
     ticker_code = ticker_code.strip()
     if not ticker_code:
         return _err("ticker_code가 비어 있습니다.")
+    try:
+        minutes = _minute_interval(chart_type)
+    except ValueError as e:
+        return _err(str(e))
+    date = (date or "").strip().replace("-", "")
+    if date and not re.fullmatch(r"\d{8}", date):
+        return _err(f"date는 YYYYMMDD 형식이어야 합니다: {date}")
 
     errors: dict[str, str] = {}
     try:
@@ -299,17 +339,10 @@ def get_current_price_and_chart(
         "unit": "원",
     }
 
-    if chart_type and chart_type.lower() != "day":
-        try:
-            candles = _parse_minute_chart(kis.get_minute_chart(ticker_code))
-            if candles:
-                payload["minute"] = {
-                    "requested_interval": chart_type,
-                    "candles": candles,
-                    "note": "당일 분봉. 한투 API는 구간별 봉 단위 미지원, 이평·볼린저는 일봉 기준.",
-                }
-        except Exception as e:
-            errors["minute_chart"] = str(e)
+    if minutes:
+        payload["minute"], minute_error = _minute_payload(ticker_code, minutes, date)
+        if minute_error:
+            errors["minute_chart"] = minute_error
 
     if include_orderbook:
         try:
@@ -353,6 +386,10 @@ def get_institutional_buying(
       loan             — 신용융자 잔고. 급증 시 반대매매 리스크
 
     개인만 순매수하고 외인·기관이 모두 순매도면 이른바 '설거지 패턴'이니 주의하세요.
+
+    daily_confirmed·daily_detail의 as_of_date는 마지막 확정일, today_included는 오늘 행 포함 여부입니다.
+    당일 행은 장 종료 후에야 채워져서, 그 전에 0으로 온 행은 unconfirmed_dates로 빼고 합계에 넣지 않습니다.
+    일봉과 대조해 다른 날짜 값이 붙은 행은 daily_detail.excluded_rows로 빼고 errors.date_check에 경고합니다.
     """
     ticker_code = ticker_code.strip()
     if not ticker_code:
@@ -360,41 +397,42 @@ def get_institutional_buying(
 
     errors: dict[str, str] = {}
     payload: dict[str, Any] = {"ticker": {"code": ticker_code}, "days_requested": days_back}
+    today = datetime.now().strftime("%Y%m%d")
 
-    # 1) 일별 확정 수급
+    # 1)·2) 일별 확정 수급(금액)과 투자자 일별 상세(수량). 순서가 아니라 날짜로 맞추고,
+    # 일봉과 대조해서 다른 날짜 값이 붙은 행을 걸러낸다. 6) 공매도 종가와도 대조한다.
+    confirmed_raw: list[dict[str, Any]] | None = None
+    detail_rows: list[dict[str, Any]] | None = None
     try:
-        rows = kis._rows(kis.get_investor_trend(ticker_code), "output", "output1", "output2")
-        foreign_daily, inst_daily, indiv_daily = [], [], []
-        f_sum = o_sum = p_sum = 0
-        for row in rows[:days_back]:
-            date = row.get("stck_bsop_date") or ""
-            f_amt = (kis.i(row.get("frgn_ntby_tr_pbmn")) or 0) * INVESTOR_AMT_MULTIPLIER
-            o_amt = (kis.i(row.get("orgn_ntby_tr_pbmn")) or 0) * INVESTOR_AMT_MULTIPLIER
-            p_amt = (kis.i(row.get("prsn_ntby_tr_pbmn")) or 0) * INVESTOR_AMT_MULTIPLIER
-            f_sum += f_amt
-            o_sum += o_amt
-            p_sum += p_amt
-            foreign_daily.append({"date": date, "net_buying_amt": f_amt})
-            inst_daily.append({"date": date, "net_buying_amt": o_amt})
-            indiv_daily.append({"date": date, "net_buying_amt": p_amt})
-        payload["daily_confirmed"] = {
-            "foreign": {"net_buying_amt_sum": f_sum, "daily": foreign_daily},
-            "institution": {"net_buying_amt_sum": o_sum, "daily": inst_daily},
-            "individual": {"net_buying_amt_sum": p_sum, "daily": indiv_daily},
-            "unit": "원",
-        }
+        confirmed_raw = kis._rows(kis.get_investor_trend(ticker_code), "output", "output1", "output2")
     except Exception as e:
         errors["daily_confirmed"] = str(e)
-
-    # 2) 종목별 투자자 일별 상세 (외국인 등록/미등록 분리)
     try:
-        payload["daily_detail"] = {
-            "rows": kis.get_investor_by_stock_daily(ticker_code, days=days_back),
-            "unit": "주",
-            "note": "수량 기준입니다. 금액은 daily_confirmed를 보세요.",
-        }
+        detail_rows = kis.get_investor_by_stock_daily(ticker_code, days=days_back + 5)
     except Exception as e:
         errors["daily_detail"] = str(e)
+    ref_bars: dict[str, dict[str, Any]] = {}
+    try:
+        ref_bars = {b["date"]: b for b in kis.get_daily_bars(ticker_code, count=days_back + 10)}
+    except Exception as e:
+        errors["daily_check"] = f"일봉 대조 실패: {e}"
+
+    if include_short_sale:
+        try:
+            payload["short_sale"] = kis.get_daily_short_sale(ticker_code, days=days_back * 2)
+        except Exception as e:
+            errors["short_sale"] = str(e)
+    short_closes = {d["date"]: d["close"] for d in payload.get("short_sale", {}).get("daily", [])}
+
+    daily_confirmed, daily_detail, warnings = investor_daily.build(
+        confirmed_raw or [], detail_rows, ref_bars, short_closes, today, days_back, INVESTOR_AMT_MULTIPLIER,
+    )
+    if confirmed_raw is not None:
+        payload["daily_confirmed"] = daily_confirmed
+    if daily_detail is not None:
+        payload["daily_detail"] = daily_detail
+    if warnings:
+        errors["date_check"] = " / ".join(warnings)
 
     # 3) 장중 추정 가집계
     if include_intraday_estimate:
@@ -429,13 +467,6 @@ def get_institutional_buying(
             }
         except Exception as e:
             errors["program"] = str(e)
-
-    # 6) 공매도
-    if include_short_sale:
-        try:
-            payload["short_sale"] = kis.get_daily_short_sale(ticker_code, days=days_back * 2)
-        except Exception as e:
-            errors["short_sale"] = str(e)
 
     # 7) 신용융자
     if include_loan:
@@ -589,6 +620,79 @@ def get_kr_disclosures(
     if errors:
         payload["errors"] = errors
     return _dump(payload)
+
+
+@mcp.tool()
+def get_kr_index_snapshot() -> str:
+    """
+    코스피·코스닥 지수의 현재 값과 전일 대비 등락률, 상승·하락·보합·상한·하한 종목 수를 반환합니다.
+
+    장중이면 실시간 값, 장 마감 후면 당일 종가 기준입니다. queried_at(조회 시각)을 같이 보세요.
+    오늘 시장 분위기(지수 방향, 상승 종목이 많은지)를 볼 때 씁니다.
+    종목의 지수 대비 초과수익률은 get_current_price_and_chart의 relative_strength를 보세요.
+    volume_thousand_shares는 천 주, trade_value_million_krw는 백만 원 단위 (한투 원 단위 그대로)입니다.
+    """
+    now = datetime.now()
+    payload: dict[str, Any] = {"queried_at": now.strftime("%Y-%m-%d %H:%M:%S")}
+    errors: dict[str, str] = {}
+    for name, code in (("KOSPI", kis.INDEX_KOSPI), ("KOSDAQ", kis.INDEX_KOSDAQ)):
+        try:
+            payload[name] = kis.get_index_price(code)
+        except Exception as e:
+            errors[name] = str(e)
+    hhmm = now.strftime("%H%M")
+    payload["session"] = ("장중" if "0900" <= hhmm < "1530" and now.weekday() < 5
+                          else "장 마감 후 또는 장 시작 전 (마지막 거래일 값)")
+    if errors:
+        payload["errors"] = errors
+    return _dump(payload)
+
+
+DAILY_HISTORY_MAX_DAYS = 365 * 10
+
+
+@mcp.tool()
+def get_kr_daily_history(
+    ticker_code: str,
+    start: str = "",
+    end: str = "",
+) -> str:
+    """
+    종목 또는 지수의 과거 일봉(수정주가)을 기간으로 조회합니다. 1년 이상도 됩니다.
+
+    - ticker_code: 종목코드 6자리, 또는 지수 KOSPI(0001)·KOSDAQ(1001)
+    - start / end: YYYYMMDD. 비우면 end=오늘, start=end로부터 1년 전
+      (최대 10년)
+
+    backtest_kr_rule과 같은 일봉 수집 함수를 쓰므로 종가가 서로 일치합니다.
+    받은 데이터는 로컬에 캐시해서 같은 날 같은 조회는 API를 부르지 않습니다(from_cache).
+    날이 바뀐 뒤에는 최근 구간을 다시 받아 대조하고, 분할·병합으로 수정주가가 바뀌었으면 새로 받습니다.
+    상장한 지 얼마 안 돼 요청 기간보다 이력이 짧으면 있는 만큼만 주고 insufficient_history=true입니다.
+    """
+    code = ticker_code.strip()
+    if not code:
+        return _err("ticker_code가 비어 있습니다.")
+    start, end = start.strip().replace("-", ""), end.strip().replace("-", "")
+    for label, value in (("start", start), ("end", end)):
+        if value and not re.fullmatch(r"\d{8}", value):
+            return _err(f"{label}는 YYYYMMDD 형식이어야 합니다: {value}")
+    end = end or datetime.now().strftime("%Y%m%d")
+    start = start or (datetime.strptime(end, "%Y%m%d") - timedelta(days=365)).strftime("%Y%m%d")
+    if start > end:
+        return _err(f"start({start})가 end({end})보다 늦습니다.")
+    if (datetime.strptime(end, "%Y%m%d") - datetime.strptime(start, "%Y%m%d")).days > DAILY_HISTORY_MAX_DAYS:
+        return _err("조회 기간은 최대 10년입니다.")
+
+    try:
+        bars, meta = daily_history.get_history(code, start, end)
+    except Exception as e:
+        return _err(f"일봉 조회 실패: {e}", ticker_code=code)
+    return _dump({
+        **meta,
+        "bars": bars,
+        "unit": "포인트" if meta["is_index"] else "원",
+        "note": "수정주가 기준입니다. volume은 주(지수는 한투 원 단위 그대로)입니다.",
+    })
 
 
 BACKTEST_MAX_TICKERS = 40
