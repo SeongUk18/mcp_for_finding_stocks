@@ -1,5 +1,4 @@
 python-dotenv
 httpx
-youtube-transcript-api
 mcp>=1.0,<2
 

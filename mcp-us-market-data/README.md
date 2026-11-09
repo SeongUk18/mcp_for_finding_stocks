@@ -7,7 +7,7 @@
 
 | 도구 | 역할 | 한국장 대응 |
 |------|------|-------------|
-| `search_serenity_tickers` | 세레니티(@aleabitoreddit) X 게시물에서 언급 티커 집계 | `search_youtube_keywords` |
+| `search_serenity_tickers` | 세레니티(@aleabitoreddit) X 게시물에서 언급 티커 집계 | — |
 | `get_us_market_movers` | 상승률·거래량·급등·시총 순위 (한투) | — |
 | `get_us_institutional_flow` | 기관 보유(13F) + 공매도 + 상대강도 + 애널리스트 | `get_institutional_buying` |
 | `get_us_price_and_chart` | 실시간 시세 + 이평/볼린저/ATR + 호가 + 분봉 | `get_current_price_and_chart` |

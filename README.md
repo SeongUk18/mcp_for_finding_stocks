@@ -4,12 +4,9 @@
 
 | 서버 | 시장 | 역할 | 도구 |
 |------|------|------|------|
-| **mcp-trend-scraper** | 🇰🇷 | 소셜/재료 수집 | `search_youtube_keywords`, `search_news_for_trend_keywords` |
-| **mcp-market-data** | 🇰🇷 | 퀀트/차트/수급/공시 | `get_kr_market_movers`, `get_current_price_and_chart`, `get_institutional_buying`, `get_kr_news_and_opinion`, `get_kr_disclosures`, `backtest_kr_rule` |
+| **mcp-trend-scraper** | 🇰🇷 | 뉴스 수집 | `search_news_for_trend_keywords` |
+| **mcp-market-data** | 🇰🇷 | 퀀트/차트/수급/공시 | `get_kr_market_movers`, `get_current_price_and_chart`, `get_institutional_buying`, `get_kr_news_and_opinion`, `get_kr_disclosures`, `get_kr_index_snapshot`, `get_kr_daily_history`, `backtest_kr_rule` |
 | **mcp-us-market-data** | 🇺🇸 | 미국장 전 과정 | `search_serenity_tickers`, `get_us_market_movers`, `get_us_price_and_chart`, `get_us_institutional_flow`, `get_us_news_sentiment`, `get_us_insider_trades`, `backtest_us_rule` |
-
-`search_youtube_keywords`는 키워드 없이 불러도 국내 상장 종목명 전체를 사전으로 자막에서 종목을 자동 검출하고
-(`detected_stocks`), 기본값으로 자막 전문 대신 언급 주변 문장(`snippets`)만 돌려줍니다. 전문이 필요하면 `transcript_mode="full"`.
 
 미국장 서버는 **키 없이도 동작**하지만(yfinance + 공개 아카이브),
 한투 키가 있으면 **무료 실시간 시세·프리마켓 분봉·호가·순위·한글 뉴스**까지 씁니다.
@@ -22,7 +19,6 @@
 
 1. **Python 3.10+** 설치 ([python.org](https://www.python.org/downloads/))
 2. 각 서버 폴더에 **`.env`** 파일이 있음 → API 키만 채우면 됨 (미국장 서버는 불필요)
-3. **Trend Scraper**: `config.py`의 `YOUTUBE_CHANNELS`에 실제 유튜브 채널 ID 입력 시 검색 결과 나옴
 
 ---
 
@@ -30,8 +26,8 @@
 
 ```
 mcp_for_finding_stocks/
-├── mcp-trend-scraper/       # 유튜브·뉴스
-│   ├── .env                 # API 키 (YOUTUBE, NAVER)
+├── mcp-trend-scraper/       # 네이버 뉴스
+│   ├── .env                 # API 키 (NAVER)
 │   ├── config.py
 │   ├── main.py
 │   ├── services/
@@ -128,6 +124,6 @@ python -m venv .venv
 
 | 서버 | 필요한 키 | 발급처 |
 |------|-----------|--------|
-| trend-scraper | YOUTUBE_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET | [Google Cloud](https://console.cloud.google.com), [Naver Developers](https://developers.naver.com) |
+| trend-scraper | NAVER_CLIENT_ID, NAVER_CLIENT_SECRET | [Naver Developers](https://developers.naver.com) |
 | market-data | KIS_APPKEY, KIS_APPSECRET, (공시용) DART_API_KEY | [한국투자증권 API 포털](https://apiportal.koreainvestment.com), [OpenDART](https://opendart.fss.or.kr) |
 | **us-market-data** | (선택) KIS_APPKEY, KIS_APPSECRET | 없어도 동작하지만 넣으면 실시간 시세·호가·순위가 열립니다. market-data와 같은 키를 씁니다 |
