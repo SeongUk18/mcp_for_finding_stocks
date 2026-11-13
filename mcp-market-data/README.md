@@ -9,6 +9,8 @@
 | **get_kr_market_movers** | 거래량·등락률·체결강도·VI 순위 (후보 발굴) |
 | **get_current_price_and_chart** | 현재가 + 이평/볼린저/ATR/52주/코스피 대비 상대강도 + 호가 |
 | **get_institutional_buying** | 수급 종합 (확정치·가집계·창구·외국계·프로그램·공매도·융자) |
+| **get_kr_investor_ranking** | 시장 전체 외국인·기관 순매수·순매도 상위 30종목 (장중 가집계) |
+| **scan_kr_setups** | 백테스트로 검증된 셋업(급락 반등·신고가권 눌림·신고가 돌파 눌림)에 해당하는 종목 스캔 |
 | **get_kr_news_and_opinion** | 한투 속보 + 증권사 투자의견·목표주가 + 실적 컨센서스 |
 | **get_kr_disclosures** | DART 공시(성격 분류) + 임원·주요주주 소유보고 + 5% 대량보유 |
 | **get_kr_index_snapshot** | 코스피·코스닥 지수 등락률 + 상승·하락·보합 종목 수 |

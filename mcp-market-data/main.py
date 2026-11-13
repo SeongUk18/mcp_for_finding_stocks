@@ -27,6 +27,7 @@ from services import daily_history
 from services import investor_daily
 from services import kis_api as kis
 from services import krx_master
+from services import setups
 from services.indicators import analyze_technicals
 
 mcp = FastMCP("market-data", json_response=True)
@@ -353,6 +354,46 @@ def get_current_price_and_chart(
     if errors:
         payload["errors"] = errors
     return _dump(payload)
+
+
+@mcp.tool()
+def get_kr_investor_ranking(
+    investor: str = "all",
+    market: str = "all",
+    side: str = "buy",
+    sort_by: str = "quantity",
+) -> str:
+    """
+    시장 전체에서 외국인·기관이 오늘 많이 사거나 판 종목 상위 30개를 반환합니다 (장중 가집계).
+    종목을 정하지 않고 "수급이 붙는 종목"을 먼저 찾을 때 씁니다. 종목별 연속 순매수 일수는
+    여기서 고른 종목에 get_institutional_buying을 돌려 확인하세요.
+
+    - investor: all(외국인+기관 합산) / foreign(외국인) / institution(기관계)
+    - market: all / kospi / kosdaq
+    - side: buy(순매수 상위) / sell(순매도 상위)
+    - sort_by: quantity(수량) / amount(금액)
+
+    주의: 확정치가 아니라 증권사 가집계 추정입니다. 장 마감 후에는 당일 최종 가집계가 남고,
+    일별 확정치(get_institutional_buying의 daily_confirmed)와 값이 다를 수 있습니다.
+    금액 필드(*_net_amt_mil)는 백만원 단위입니다.
+    """
+    inv = {"all": "0", "foreign": "1", "institution": "2"}.get(investor.strip().lower())
+    mkt = {"all": "0000", "kospi": "0001", "kosdaq": "1001"}.get(market.strip().lower())
+    if inv is None or mkt is None or side not in ("buy", "sell") or sort_by not in ("quantity", "amount"):
+        return _err("investor는 all/foreign/institution, market은 all/kospi/kosdaq, "
+                    "side는 buy/sell, sort_by는 quantity/amount 중 하나여야 합니다.")
+    try:
+        rows = kis.get_foreign_institution_total(
+            market=mkt, by_amount=sort_by == "amount", sell=side == "sell", investor=inv)
+    except Exception as e:
+        return _err(f"외국인·기관 매매종목 가집계 조회 실패: {e}")
+    return _dump({
+        "request": {"investor": investor, "market": market, "side": side, "sort_by": sort_by},
+        "as_of": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "data_status": "장중 가집계(추정) — 확정치 아님",
+        "returned": len(rows),
+        "items": rows,
+    })
 
 
 @mcp.tool()
@@ -790,6 +831,81 @@ def backtest_kr_rule(
     if errors:
         result["errors"] = errors
     return _dump(result)
+
+
+@mcp.tool()
+def scan_kr_setups(tickers: list[str] | None = None, include_regime_blocked: bool = False) -> str:
+    """
+    백테스트로 검증된 진입 유형(셋업)에 지금 해당하는 국내 종목을 찾습니다. 후보 발굴의 1순위 채널입니다.
+
+    - tickers: 비우면 고정 종목군(대형·유동성 상위 약 90개)을 봅니다. 다른 종목을 넣을 수도 있지만
+      백테스트는 고정 종목군에서만 했으니, 그 밖의 종목 결과는 검증 범위 밖이라고 밝히세요
+    - include_regime_blocked: True면 지수 국면 때문에 막힌 셋업(regime_ok=false)도 함께 반환
+
+    셋업 3가지 (신호는 마지막 완결 일봉 종가 기준, 진입은 그다음 거래일):
+      dip               — 60일선 위 종목이 5일간 -8% 이상 급락. 종가 - ATR 0.5배 지정가. 지수 국면 무관
+      high_pullback     — 52주 고점 -8~-1%, 정배열, 20일선 위에서 음봉. 다음 날 시가 진입. 지수 20일선 위일 때만
+      breakout_pullback — 거래량 1.5배 이상으로 52주 신고가 마감. 종가 - ATR 0.5배 지정가. 지수 20일선 위일 때만
+    청산은 공통으로 손절 ATR 1.5배 · 목표 ATR 3배 · 최대 5거래일(5일째 종가 청산)입니다.
+
+    각 항목의 ledger_scenario는 리포트의 pickbot-ledger 블록 scenarios에 그대로 넣는 값입니다.
+    setups.backtest는 약 4년 백테스트의 거래당 평균 수익률(비용 차감)입니다. 과거 성과는 미래를 보장하지 않고,
+    지금 살아 있는 대형주만 본 값이라 생존 편향이 있습니다.
+    signal_date가 오늘이 아니면 장중이거나 휴장이라 직전 거래일 신호라는 뜻입니다.
+    """
+    codes = [t.strip() for t in (tickers or setups.UNIVERSE["kr"]) if t and t.strip()]
+    now = datetime.now()
+    end, start = now.strftime("%Y%m%d"), (now - timedelta(days=450)).strftime("%Y%m%d")
+    errors: dict[str, str] = {}
+    data: dict[str, list[dict[str, Any]]] = {}
+    names: dict[str, str] = {}
+    markets: dict[str, str] = {}
+    for t in codes:
+        try:
+            data[t], _ = daily_history.get_history(t, start, end)
+        except Exception as e:
+            errors[t] = str(e)
+            continue
+        try:
+            info = krx_master.lookup(t)
+        except Exception:
+            info = None
+        names[t] = info["name"] if info else None
+        markets[t] = info["market"] if info and info["market"] in ("KOSPI", "KOSDAQ") else "KOSPI"
+
+    bench: dict[str, dict[str, float]] = {}
+    regimes: dict[str, dict[str, Any]] = {}
+    for name in ("KOSPI", "KOSDAQ"):
+        try:
+            rows, _ = daily_history.get_history(name, start, end)
+            bench[name] = {b["date"]: b["close"] for b in rows}
+            regimes[name] = setups.regime_of(bench[name])
+        except Exception as e:
+            errors[f"index_{name}"] = str(e)
+
+    matches = setups.scan(
+        "kr", data,
+        {t: bench.get(m, {}) for t, m in markets.items()},
+        {t: regimes.get(m, {}) for t, m in markets.items()},
+        names=names, price_digits=0,
+    )
+    blocked = [m for m in matches if not m["regime_ok"]]
+    if not include_regime_blocked:
+        matches = [m for m in matches if m["regime_ok"]]
+    payload: dict[str, Any] = {
+        "as_of": now.strftime("%Y-%m-%d %H:%M"),
+        "universe_size": len(data),
+        "regime": regimes,
+        "regime_note": "지수 종가가 20일선 아래면 high_pullback·breakout_pullback은 쓰지 않습니다 (백테스트상 손실 구간). dip만 유효합니다.",
+        "setups": setups.describe("kr"),
+        "exit_plan": {"stop_atr": setups.STOP_ATR, "target_atr": setups.TARGET_ATR, "max_hold_days": setups.MAX_HOLD_DAYS},
+        "matched": len(matches),
+        "regime_blocked": len(blocked),
+        "matches": matches,
+    }
+    if errors:
+        payload["errors"] = errors
+    return _dump(payload)
 
 
 def main() -> None:

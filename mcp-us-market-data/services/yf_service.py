@@ -86,6 +86,32 @@ def get_history(symbol: str, period: str = "1y", interval: str = "1d") -> dict[s
     }
 
 
+def get_daily_batch(
+    symbols: list[str], period: str = "2y", errors: dict[str, str] | None = None,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    """
+    여러 종목 일봉을 한 번에 받는다 (수정주가 — 최신 봉 가격은 실제 체결가와 같다).
+    반환: ({심볼: [date(YYYYMMDD)·open·high·low·close·volume]}, {}). 실패한 심볼은 errors에 남긴다.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    df = yf.download(symbols, period=period, interval="1d", auto_adjust=True, group_by="ticker",
+                     threads=True, progress=False)
+    for sym in symbols:
+        try:
+            sub = df[sym].dropna(subset=["Close"])
+            if sub.empty:
+                raise ValueError("데이터 없음")
+            out[sym] = [
+                {"date": d.strftime("%Y%m%d"), "open": float(r.Open), "high": float(r.High), "low": float(r.Low),
+                 "close": float(r.Close), "volume": float(r.Volume) if pd.notna(r.Volume) else 0.0}
+                for d, r in sub.iterrows()
+            ]
+        except Exception as e:
+            if errors is not None:
+                errors[sym] = f"{type(e).__name__}: {e}"
+    return out, {}
+
+
 def get_benchmark_closes(names: list[str] | None = None, period: str = "1y") -> dict[str, list[float]]:
     """벤치마크 종가. 10분 캐시. 실패한 벤치마크는 결과에서 빠진다."""
     out: dict[str, list[float]] = {}

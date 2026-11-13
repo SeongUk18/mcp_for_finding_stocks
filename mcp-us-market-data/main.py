@@ -28,6 +28,7 @@ from services import backtest
 from services import kis_overseas as kis
 from services import sec_insider as sec
 from services import serenity_service as serenity
+from services import setups
 from services import yf_service as yfs
 from services.indicators import analyze_technicals
 
@@ -622,6 +623,49 @@ def backtest_us_rule(
     if errors:
         result["errors"] = errors
     return _dump(result)
+
+
+@mcp.tool()
+def scan_us_setups(symbols: list[str] | None = None, include_regime_blocked: bool = False) -> str:
+    """
+    백테스트로 검증된 진입 유형(셋업)에 지금 해당하는 미국 종목을 찾습니다. 후보 발굴의 1순위 채널입니다.
+
+    - symbols: 비우면 고정 종목군(대형·유동성 상위 약 95개)을 봅니다. 다른 티커를 넣을 수도 있지만
+      백테스트는 고정 종목군에서만 했으니, 그 밖의 종목 결과는 검증 범위 밖이라고 밝히세요
+    - include_regime_blocked: True면 지수 국면 때문에 막힌 셋업(regime_ok=false)도 함께 반환
+
+    셋업 2가지 (신호는 마지막 완결 정규장 종가 기준, 진입은 그다음 세션):
+      dip           — 60일선 위 종목이 5일간 -8% 이상 급락. 종가 - ATR 0.5배 지정가. 지수 국면 무관
+      high_pullback — 52주 고점 -8~-1%, 정배열, 20일선 위에서 음봉. 종가 - ATR 1.0배 지정가. SPY가 20일선 위일 때만
+    청산은 공통으로 손절 ATR 1.5배 · 목표 ATR 3배 · 최대 5거래일(5일째 종가 청산)입니다.
+
+    각 항목의 ledger_scenario는 리포트의 pickbot-ledger 블록 scenarios에 그대로 넣는 값입니다.
+    setups.backtest는 약 4년 백테스트의 거래당 평균 수익률(비용 차감)입니다. 과거 성과는 미래를 보장하지 않고,
+    지금 살아 있는 대형주만 본 값이며 조사 기간이 강세장이라 낙관적일 수 있습니다.
+    일봉은 yfinance 기준이라 정규장 진행 중에는 마지막 봉이 미완결일 수 있습니다 (signal_date 확인).
+    """
+    syms = [s.strip().upper() for s in (symbols or setups.UNIVERSE["us"]) if s and s.strip()]
+    errors: dict[str, str] = {}
+    data, _ = yfs.get_daily_batch(syms + ["SPY"], period="2y", errors=errors)
+    spy = {b["date"]: b["close"] for b in data.pop("SPY", [])}
+    regime = setups.regime_of(spy) if spy else {"up": None}
+    matches = setups.scan("us", data, {s: spy for s in data}, {s: regime for s in data}, price_digits=2)
+    blocked = [m for m in matches if not m["regime_ok"]]
+    if not include_regime_blocked:
+        matches = [m for m in matches if m["regime_ok"]]
+    payload: dict[str, Any] = {
+        "universe_size": len(data),
+        "regime": {"SPY": regime},
+        "regime_note": "SPY 종가가 20일선 아래면 high_pullback은 쓰지 않습니다 (백테스트상 우위 없음). dip만 유효합니다.",
+        "setups": setups.describe("us"),
+        "exit_plan": {"stop_atr": setups.STOP_ATR, "target_atr": setups.TARGET_ATR, "max_hold_days": setups.MAX_HOLD_DAYS},
+        "matched": len(matches),
+        "regime_blocked": len(blocked),
+        "matches": matches,
+    }
+    if errors:
+        payload["errors"] = errors
+    return _dump(payload)
 
 
 def main() -> None:

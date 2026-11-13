@@ -5,8 +5,8 @@
 | 서버 | 시장 | 역할 | 도구 |
 |------|------|------|------|
 | **mcp-trend-scraper** | 🇰🇷 | 뉴스 수집 | `search_news_for_trend_keywords` |
-| **mcp-market-data** | 🇰🇷 | 퀀트/차트/수급/공시 | `get_kr_market_movers`, `get_current_price_and_chart`, `get_institutional_buying`, `get_kr_news_and_opinion`, `get_kr_disclosures`, `get_kr_index_snapshot`, `get_kr_daily_history`, `backtest_kr_rule` |
-| **mcp-us-market-data** | 🇺🇸 | 미국장 전 과정 | `search_serenity_tickers`, `get_us_market_movers`, `get_us_price_and_chart`, `get_us_institutional_flow`, `get_us_news_sentiment`, `get_us_insider_trades`, `backtest_us_rule` |
+| **mcp-market-data** | 🇰🇷 | 퀀트/차트/수급/공시 | `get_kr_market_movers`, `get_current_price_and_chart`, `get_institutional_buying`, `get_kr_investor_ranking`, `get_kr_news_and_opinion`, `get_kr_disclosures`, `get_kr_index_snapshot`, `get_kr_daily_history`, `backtest_kr_rule`, `scan_kr_setups` |
+| **mcp-us-market-data** | 🇺🇸 | 미국장 전 과정 | `search_serenity_tickers`, `get_us_market_movers`, `get_us_price_and_chart`, `get_us_institutional_flow`, `get_us_news_sentiment`, `get_us_insider_trades`, `backtest_us_rule`, `scan_us_setups` |
 
 미국장 서버는 **키 없이도 동작**하지만(yfinance + 공개 아카이브),
 한투 키가 있으면 **무료 실시간 시세·프리마켓 분봉·호가·순위·한글 뉴스**까지 씁니다.

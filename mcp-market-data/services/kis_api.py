@@ -605,16 +605,19 @@ def get_vi_status() -> list[dict[str, Any]]:
 
 # ---------------------------------------------------------------- 수급
 
-def get_foreign_institution_total() -> list[dict[str, Any]]:
+def get_foreign_institution_total(
+    market: str = "0000", by_amount: bool = False, sell: bool = False, investor: str = "0",
+) -> list[dict[str, Any]]:
     """
     외국인·기관 매매종목 가집계 (FHPTJ04400000).
     확정치가 아닌 장중 추정이라 '오늘 누가 담고 있나'를 볼 수 있는 유일한 창구다.
+    market 0000 전체·0001 코스피·1001 코스닥 / investor 0 전체·1 외국인·2 기관계
     """
     res = _checked(
         _kis_request(f"{Q}/foreign-institution-total", "FHPTJ04400000", {
             "FID_COND_MRKT_DIV_CODE": "V", "FID_COND_SCR_DIV_CODE": "16449",
-            "FID_INPUT_ISCD": "0000", "FID_DIV_CLS_CODE": "0",
-            "FID_RANK_SORT_CLS_CODE": "0", "FID_ETC_CLS_CODE": "0",
+            "FID_INPUT_ISCD": market, "FID_DIV_CLS_CODE": "1" if by_amount else "0",
+            "FID_RANK_SORT_CLS_CODE": "1" if sell else "0", "FID_ETC_CLS_CODE": investor,
         }),
         "FHPTJ04400000",
     )
@@ -630,6 +633,8 @@ def get_foreign_institution_total() -> list[dict[str, Any]]:
         "investment_trust_net_qty": i(r.get("ivtr_ntby_qty")),
         "pension_net_qty": i(r.get("fund_ntby_qty")),
         "insurance_net_qty": i(r.get("insu_ntby_qty")),
+        "foreign_net_amt_mil": i(r.get("frgn_ntby_tr_pbmn")),      # 백만원
+        "institution_net_amt_mil": i(r.get("orgn_ntby_tr_pbmn")),  # 백만원
     } for r in _rows(res, "output")]
 
 
